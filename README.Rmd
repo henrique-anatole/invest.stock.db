@@ -33,19 +33,19 @@ db_name <- "test_stock_db"
 db_path <- file.path(tempdir(), db_name)
 
 # create the database connection
-con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
 
 ```
 
 # Check the database structure and contents
 ```{r check_db, results='asis'}
 # check the connection
-if (!grepl("connection", class(con))) {
+if (!grepl("connection", class(db_con))) {
     stop("Failed to connect to the database.")
   }
 
 # List tables in the database. For this example, we expect to see nothing as we have not populated it yet.
-tables <- DBI::dbListTables(con)
+tables <- DBI::dbListTables(db_con)
 
 ```
 
@@ -60,10 +60,10 @@ if (!"all_symbols" %in% tables) {
   }
 
 # get the list of symbols
-all_symbols <- invest.stock.db::get_symbols(con)
+all_symbols <- invest.stock.db::get_symbols(db_con)
 
 # disconnect when done
-DBI::dbDisconnect(con, shutdown = TRUE)
+DBI::dbDisconnect(db_con, shutdown = TRUE)
 
 ```
 

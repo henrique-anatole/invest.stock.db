@@ -67,8 +67,6 @@ test_that("scrap_asx_symbols: returns tibble with expected columns", {
   expect_true(all(df$market_cap > 0, na.rm = TRUE))
 })
 
-
-# Test later:
 test_that("scrap_b3_symbols: returns tibble with expected columns", {
   skip_on_cran()
 
@@ -109,4 +107,24 @@ test_that("scrap_b3_symbols: handles missing classification file gracefully", {
     scrap_b3_symbols(class_file = "nonexistent_file.csv"),
     regexp = "Classification file not found at the provided path"
   )
+})
+
+test_that("create_benchmarks: check if returns the expected data frame", {
+  res <- create_benchmarks()
+  expect_s3_class(res, "data.frame")
+  expected_cols <- c(
+    "symbol",
+    "name",
+    "sector",
+    "subsector",
+    "market_cap",
+    "estimated_tot_shares",
+    "index",
+    "rank",
+    "coin",
+    "weight",
+    "date_updated",
+    "source"
+  )
+  expect_true(all(expected_cols %in% names(res)))
 })

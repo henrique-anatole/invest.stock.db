@@ -4,10 +4,10 @@
 \alias{load_symbols}
 \title{Function to get all stock symbols from the DuckDB database}
 \usage{
-load_symbols(con)
+load_symbols(db_con)
 }
 \arguments{
-\item{con}{A valid DBI connection object to the DuckDB database.}
+\item{db_con}{A valid DBI connection object to the DuckDB database.}
 }
 \value{
 A list containing data frames for all symbols and filtered symbols by index.
@@ -20,13 +20,13 @@ and filters them based on their respective indices (ASX, B3, SP500, Benchmark).
 \dontrun{
 db_file <- "/mnt/nas_nuvens/stock_data/stock_data - Copia.duckdb"
 # create a connection to the database
-con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_file, read_only = TRUE)
-symbols <- load_symbols(con)
+db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_file, read_only = TRUE)
+symbols <- load_symbols(db_con)
 head(symbols$all_symbols_au)
 head(symbols$all_symbols_br)
 head(symbols$all_symbols_sp500)
 head(symbols$all_benchmarks)
-dbDisconnect(con)
+dbDisconnect(db_con)
 }
 
 }

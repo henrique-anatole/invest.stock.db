@@ -3,7 +3,7 @@
 #' This function connects to a DuckDB database, retrieves all stock symbols,
 #' and filters them based on their respective indices (ASX, B3, SP500, Benchmark).
 #'
-#' @param con A valid DBI connection object to the DuckDB database.
+#' @param db_con A valid DBI connection object to the DuckDB database.
 #'
 #' @return A list containing data frames for all symbols and filtered symbols by index.
 #'
@@ -15,27 +15,27 @@
 #' \dontrun{
 #' db_file <- "/mnt/nas_nuvens/stock_data/stock_data - Copia.duckdb"
 #' # create a connection to the database
-#' con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_file, read_only = TRUE)
-#' symbols <- load_symbols(con)
+#' db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_file, read_only = TRUE)
+#' symbols <- load_symbols(db_con)
 #' head(symbols$all_symbols_au)
 #' head(symbols$all_symbols_br)
 #' head(symbols$all_symbols_sp500)
 #' head(symbols$all_benchmarks)
-#' dbDisconnect(con)
+#' dbDisconnect(db_con)
 #' }
 #'
-load_symbols <- function(con) {
+load_symbols <- function(db_con) {
   # # check the connection
-  if (!grepl("connection", class(con))) {
+  if (!grepl("connection", class(db_con))) {
     stop("Failed to connect to the database.")
   }
 
   # Check if the table 'all_symbols' exists
-  if (!"all_symbols" %in% DBI::dbListTables(con)) {
+  if (!"all_symbols" %in% DBI::dbListTables(db_con)) {
     stop("Table 'all_symbols' does not exist in the database.")
   }
   # query the database to check if the data was written
-  all_symbol_data = dbGetQuery(con, "SELECT * FROM all_symbols") %>%
+  all_symbol_data = dbGetQuery(db_con, "SELECT * FROM all_symbols") %>%
     filter(symbol != "-")
 
   # Check if data was retrieved
@@ -60,7 +60,7 @@ load_symbols <- function(con) {
     filter(index == "Benchmark")
 
   # disconnect from the database
-  dbDisconnect(con)
+  dbDisconnect(db_con)
 
   return(list(
     all_symbol_data = all_symbol_data,
@@ -569,4 +569,112 @@ scrap_b3_symbols <- function(
     )
 
   return(valid_stocks_br)
+}
+
+#' Get benchmark symbols and metadata
+#'
+#' Returns a tibble of common financial benchmark symbols with metadata.
+#' These benchmarks can be used for performance comparison in investment strategies.
+#'
+#' @return A tibble with the following columns:
+#' \describe{
+#'  \item{symbol}{Ticker symbol}
+#'  \item{name}{Benchmark name}
+#'  \item{sector}{Sector classification ("Financials")}
+#'  \item{subsector}{Subsector classification ("Financials")}
+#'  \item{market_cap}{NA (not applicable)}
+#'  \item{estimated_tot_shares}{NA (not applicable)}
+#'  \item{index}{Index name ("Benchmark")}
+#'  \item{rank}{NA (not applicable)}
+#'  \item{coin}{NA (not applicable)}
+#'  \item{weight}{NA (not applicable)}
+#'  \item{date_updated}{Date of data retrieval}
+#'  \item{source}{Description of the benchmark and its purpose}
+#' }
+#' @import tibble
+#' @export
+create_benchmarks <- function() {
+  # Create the table
+  benchmarks <- tibble::tibble(
+    symbol = c(
+      "^GSPC",
+      "^IXIC",
+      "^BVSP",
+      "^AXJO",
+      "VT",
+      "SPMO",
+      "^TNX",
+      "LQD",
+      "BNDW",
+      "RSP",
+      "EMB",
+      "GC=F",
+      "GSG",
+      "^VIX",
+      "DX-Y.NYB",
+      "BTC-USD",
+      "VNQ",
+      "^DJUSRE",
+      "TIP",
+      "HYG",
+      "JNK"
+    ),
+    name = c(
+      "S&P 500",
+      "NASDAQ Composite",
+      "Bovespa (Brazil)",
+      "ASX 200 (Australia)",
+      "Global Stock Market (VT)",
+      "S&P 500 Momentum ETF",
+      "US 10Y Treasury Yield",
+      "Investment-Grade Corporate Bonds (LQD)",
+      "Global Aggregate Bonds (BNDW)",
+      "S&P 500 Equal Weight (RSP)",
+      "Emerging Markets Bonds (EMB)",
+      "Gold Futures",
+      "Bloomberg Commodities Index (GSG)",
+      "CBOE Volatility Index (VIX)",
+      "US Dollar Index (DXY)",
+      "Bitcoin (BTC)",
+      "US Real Estate (VNQ)",
+      "Dow Jones US Real Estate Index",
+      "TIPS (Inflation-Protected Bonds)",
+      "High-Yield Corporate Bonds (HYG)",
+      "High-Yield Bonds (JNK)"
+    ),
+    sector = "Financials",
+    subsector = "Financials",
+    market_cap = NA,
+    estimated_tot_shares = NA,
+    index = "Benchmark",
+    rank = NA,
+    coin = NA,
+    weight = NA,
+    date_updated = Sys.Date(),
+    source = c(
+      "Baseline for passive investing. Shows if your strategy beats simply holding the market.",
+      "Reference for IT and tech stocks.",
+      "Baseline for Brazilian stock market.",
+      "Baseline for Australian stock market.",
+      "Diversified global exposure. Checks if your strategy adds value beyond global beta.",
+      "Ranks assets by their past 12-month returns, skips the most recent month (to avoid short-term reversals), and invests in the top performers.",
+      "Index for US 10Y Treasury yield (risk-free rate proxy).",
+      "Index for US Investment-Grade Corporate Bonds (credit risk exposure).",
+      "Index for Global Bonds (diversified fixed income).",
+      "Tests if your strategy beats naive diversification (no stock-picking, just equal allocation).",
+      "Brazilian sovereign and corporate bonds (EM debt exposure).",
+      "Gold (safe-haven asset, inflation hedge).",
+      "Broad commodities basket (inflation/cyclical indicator).",
+      "Measures expected market volatility (fear gauge).",
+      "Tracks USD strength (impacts commodities/EM).",
+      "Tracks Bitcoin price (crypto exposure).",
+      "US Real Estate Investment Trusts (property market proxy).",
+      "Dow Jones US Real Estate Index (alternative to VNQ).",
+      "Treasury Inflation-Protected Securities (inflation expectations).",
+      "High-Yield Corporate Bonds (credit risk premium).",
+      "Alternative to HYG (high-yield bond exposure)."
+    )
+  )
+
+  return(benchmarks)
 }
