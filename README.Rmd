@@ -1,0 +1,82 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "man/figures/README-",
+  out.width = "100%"
+)
+```
+
+# invest.stock.db
+
+<!-- badges: start -->
+<!-- badges: end -->
+
+The goal of invest.stock.db is to support the creation of a structured database for stock data to facilitate investment analysis.
+
+
+## Step by step example
+
+The step by step below will allow you to create your own database. The invest.stock.db package will create it using duckdb and save it in a single file you can later use to connect and query. Therefore, the file name and path are the first variables to define, and this will be used to create the database connection.
+
+```{r example}
+# load the package
+library(invest.stock.db)
+# define the path and name of the database file
+db_name <- "test_stock_db"
+db_path <- file.path(tempdir(), db_name)
+
+# create the database connection
+con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+
+```
+
+# Check the database structure and contents
+```{r check_db, results='asis'}
+# check the connection
+if (!grepl("connection", class(con))) {
+    stop("Failed to connect to the database.")
+  }
+
+# List tables in the database. For this example, we expect to see nothing as we have not populated it yet.
+tables <- DBI::dbListTables(con)
+
+```
+
+# The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database. 
+```{r symbols, results='asis'}
+
+all_symbols <- load_all_symbols(
+
+# check if all_symbols table exists
+if (!"all_symbols" %in% tables) {
+    stop("Table 'all_symbols' does not exist in the database.")
+  }
+
+# get the list of symbols
+all_symbols <- invest.stock.db::get_symbols(con)
+
+# disconnect when done
+DBI::dbDisconnect(con, shutdown = TRUE)
+
+```
+
+
+
+
+
+## Installation
+
+You can install the development version of yourpackage from GitHub:
+
+``` r
+# install.packages("remotes")
+remotes::install_github("henrique-anatole/invest.data")
+
+```

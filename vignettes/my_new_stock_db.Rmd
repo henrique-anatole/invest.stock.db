@@ -1,0 +1,58 @@
+---
+title: "my_new_stock_db"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{my_new_stock_db}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(invest.stock.db)
+```
+
+# Introduction
+This vignette demonstrates how to create a new stock database using the `invest.stock.db` package. We will walk through the steps of setting up a new database, populating it with stock data, and performing basic queries.
+# Setting Up a New Stock Database
+To create a new stock database, we first need to define the structure of our database. This includes specifying the tables and fields that will hold our stock data.
+```{r create_db}
+# Create a new stock database using duckdb
+# db_name <- "test_stock_db"
+# db_path <- file.path(tempdir(), db_name)
+# con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+
+```
+
+# Check the database structure and contents
+```{r check_db, results='asis'}
+# # check the connection
+# if (!grepl("connection", class(con))) {
+#     stop("Failed to connect to the database.")
+#   }
+
+# # List tables in the database
+# tables <- DBI::dbListTables(con)
+# # check if all_symbols table exists
+# if (!"all_symbols" %in% tables) {
+#     stop("Table 'all_symbols' does not exist in the database.")
+#   }
+
+# # get the list of symbols
+# all_symbols <- invest.stock.db::get_symbols(con)
+
+```
+
+# Populate the Database with Stock Data
+
+```{r populate_db}
+
+
+```
+

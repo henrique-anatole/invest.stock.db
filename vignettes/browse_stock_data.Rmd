@@ -1,0 +1,21 @@
+---
+title: "browse_stock_data"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{browse_stock_data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(invest.stock.db)
+```
+
+Testing! Is this part of my website too?
