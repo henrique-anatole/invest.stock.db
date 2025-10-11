@@ -61,25 +61,6 @@ update_symbols_table <- function(indexes = NULL, db_con, save_data = TRUE) {
     )
   }
 
-  # check if the benchmark symbols are already in the database
-  benchmark_symbols <- tryCatch(
-    {
-      benchmark_symbols <- DBI::dbReadTable(db_con, "all_symbols")
-      return(NULL)
-    },
-    error = function(e) {
-      message(
-        "Benchmark symbols not found in the database. Creating benchmark symbols."
-      )
-      return(create_benchmarks())
-    }
-  )
-
-  all_symbols <- dplyr::bind_rows(all_symbols, benchmark_symbols)
-
-  # Remove duplicates based on the 'symbol' column
-  all_symbols <- all_symbols[!duplicated(all_symbols$symbol), ]
-
   # If save_data is TRUE, save the data as an internal dataset
   if (save_data) {
     # Write the updated symbols back to the database
@@ -89,4 +70,88 @@ update_symbols_table <- function(indexes = NULL, db_con, save_data = TRUE) {
   } else {
     return(all_symbols)
   }
+}
+
+#' Create benchmark symbols or add new ones if they don't exist
+#'
+#' This function creates a predefined set of benchmark symbols with their associated information.
+#' If the benchmark symbols already exist in the database, it checks for any new symbols and adds them.
+#' Despite having the same structure as 'all_symbols', the 'benchmark_symbols' are not expecting data changes, therefore, no updates are usually needed.
+#'
+#' @return Nothing. The function updates the 'benchmark_symbols' table in the database.
+#' @examples
+#' \dontrun{
+#' # define the path and name of the database file
+#' db_name <- "test_stock_db"
+#' db_path <- file.path(tempdir(), db_name)
+#' # create the database connection
+#' db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+#' # Create or update benchmark symbols
+#' update_benchmarks(db_con = db_con)
+#' DBI::dbDisconnect(db_con)
+#' }
+#' @export
+#'
+update_benchmarks <- function(db_con, new_benchmarks = NULL) {
+  # Validate the database connection
+  if (is.null(db_con) || !DBI::dbIsValid(db_con)) {
+    stop("Invalid or NULL database connection provided.")
+  }
+
+  # Check if the benchmark symbols table already exists in the database
+  table_exists <- DBI::dbExistsTable(db_con, "benchmark_symbols")
+
+  if (!table_exists) {
+    # If the table does not exist, create it and insert all base benchmark symbols
+    # Create the benchmark symbols data frame
+    base_benchmarks <- create_benchmarks()
+
+    DBI::dbWriteTable(db_con, "benchmark_symbols", new_benchmarks)
+    message("Base Benchmark symbols table created and populated successfully.")
+  }
+
+  # If the table exists, check for new benchmark symbols to add
+  if (is.null(new_benchmarks)) {
+    # Nothing to add, exit the function
+    message(
+      "No new symbols provided to add."
+    )
+  } else {
+    # Ensure new_benchmarks has the correct structure
+    required_cols <- c("symbol", "name", "index", "source")
+
+    if (!all(required_cols %in% colnames(new_benchmarks))) {
+      stop(paste(
+        "The new_benchmarks data frame must contain the following columns:",
+        paste(required_cols, collapse = ", ")
+      ))
+    } # end if structure is correct
+
+    # Read existing benchmark symbols from the database
+    existing_benchmarks <- DBI::dbReadTable(db_con, "benchmark_symbols")
+
+    # Identify new symbols that are not in the existing benchmarks
+    new_benchmarks <- new_benchmarks %>%
+      dplyr::filter(!symbol %in% existing_benchmarks$symbol)
+
+    if (nrow(new_benchmarks) > 0) {
+      # Append new benchmark symbols to the existing table
+      DBI::dbWriteTable(
+        db_con,
+        "benchmark_symbols",
+        new_benchmarks,
+        append = TRUE
+      )
+      message(paste(
+        nrow(new_benchmarks),
+        "new benchmark symbols added to the database."
+      ))
+    } else {
+      message(
+        "The table benchmark_symbols already have the benchmarks you want"
+      ) # end if new rows to add
+    }
+  } # end if new_benchmarks is not NULL
+
+  return(invisible(NULL))
 }
