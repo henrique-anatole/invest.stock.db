@@ -277,7 +277,7 @@ scrap_asx_symbols <- function() {
 
       # extract page
       page_source <- remDr$getPageSource()[[1]]
-      page <- read_html(page_source)
+      page <- rvest::read_html(page_source)
 
       # parse table
       asx_table <- page %>%
@@ -362,7 +362,6 @@ scrap_asx_symbols <- function() {
     },
     error = function(e) {
       warning("Error while scraping ASX data: ", e$message)
-      warning("Returning NULL.")
       return(NULL)
     },
     finally = {
@@ -414,7 +413,7 @@ scrap_b3_symbols <- function(
     stop("Classification file must be a CSV.")
   } else {
     # Load classification CSV
-    b3_class <- readr::read_csv(class_file)
+    b3_class <- suppressMessages(readr::read_csv(class_file))
     # check for mandatory columns
     required_cols <- c(
       "symbol",
@@ -443,130 +442,138 @@ scrap_b3_symbols <- function(
     phantomver = NULL
   )
   remDr <- driver$client
-  on.exit(
+  valid_stocks_br <- tryCatch(
     {
-      try(remDr$close(), silent = TRUE)
-      try(driver$server$stop(), silent = TRUE)
-    },
-    add = TRUE
-  )
+      # Navigate to B3 IBOV page
+      url <- "https://sistemaswebb3-listados.b3.com.br/indexPage/day/IBOV?language=en-us"
+      remDr$navigate(url)
+      Sys.sleep(10) # allow JS to load
 
-  # Navigate to B3 IBOV page
-  url <- "https://sistemaswebb3-listados.b3.com.br/indexPage/day/IBOV?language=en-us"
-  remDr$navigate(url)
-  Sys.sleep(10)
+      # Click the download link
+      download_link <- remDr$findElement(using = "link text", "Download")
+      download_link$clickElement()
 
-  # Click the download link
-  download_link <- remDr$findElement(using = "link text", "Download")
-  download_link$clickElement()
-
-  # find out the complete download path. If windows or linux
-  download_dir <- ifelse(
-    grepl("windows", tolower(Sys.info()[["sysname"]])),
-    file.path(Sys.getenv("USERPROFILE"), download_dir),
-    file.path(Sys.getenv("HOME"), download_dir)
-  )
-
-  # Wait dynamically for file download
-
-  wait_for_file <- function(pattern, dir = download_dir, timeout = 30) {
-    start <- Sys.time()
-    repeat {
-      files <- list.files(dir, pattern = pattern, full.names = TRUE)
-      if (length(files) > 0) {
-        return(files[[1]])
-      }
-      if (as.numeric(difftime(Sys.time(), start, units = "secs")) > timeout) {
-        stop("Timeout waiting for B3 CSV download")
-      }
-      Sys.sleep(1)
-    }
-  }
-
-  file_path <- wait_for_file(pattern = "IBOVDia", download_dir)
-
-  # Read downloaded CSV
-  # suppress warnings about parsing failures
-  b3_list <- suppressWarnings(
-    readr::read_csv(file_path, skip = 1) %>%
-      slice(1:(n() - 2)) %>% # remove last 2 summary rows
-      rename(BRX.code = Code) %>%
-      mutate(BRX.code = paste0(BRX.code, ".SA"))
-  )
-
-  # Remove the file
-  file.remove(file_path)
-
-  # Join and clean
-  valid_stocks_br <- b3_list %>%
-    rename(symbol = BRX.code) %>%
-    mutate(link = gsub("[0-9]+\\.SA$", "", symbol)) %>%
-    left_join(b3_class, by = c("link" = "symbol")) %>%
-    arrange(desc(`Part. (%)`)) %>%
-    mutate(
-      market_cap = `Theoretical Quantity`, # price not available here; calculate externally
-      price = NA_real_,
-      estimated_tot_shares = `Theoretical Quantity`,
-      coin = "BRL",
-      weight = `Part. (%)` / 100,
-      date_updated = as.Date(Sys.Date()),
-      source = url,
-      index = "B3",
-      name = coalesce(company_name, Stock),
-      rank = row_number()
-    ) %>%
-    select(
-      symbol,
-      name,
-      sector,
-      subsector,
-      market_cap,
-      estimated_tot_shares,
-      price,
-      coin,
-      weight,
-      date_updated,
-      source,
-      index,
-      rank
-    ) %>%
-    # Standardize sector/subsector
-    mutate(
-      sector = case_when(
-        sector %in% c("Consumer Non Cyclical", "Consumer Staples") ~
-          "Consumer Staples",
-        sector %in% c("Consumer Cyclical", "Consumer Discretionary") ~
-          "Consumer Discretionary",
-        sector %in% c("Oil, Gas and Biofuels", "Energy") ~ "Energy",
-        sector %in% c("Basic Materials", "Materials") ~ "Materials",
-        sector %in% c("Health", "Health Care") ~ "Health Care",
-        sector %in% c("Financial", "Financials") ~ "Financials",
-        sector %in% c("Communications", "Communication Services") ~
-          "Communication Services",
-        sector == "Capital Goods and Services" ~ "Industrials",
-        TRUE ~ sector
-      ),
-      subsector = case_when(
-        subsector == "Mining" ~ "Metals & Mining",
-        subsector == "Oil, Gas and Biofuels" ~
-          "Oil & Gas Exploration & Production",
-        subsector == "Financial Intermediaries" ~ "Diversified Financials",
-        subsector ==
-          "Medical and Hospitalar Services, Analysis and Diagnostics" ~
-          "Health Care Services",
-        subsector == "Retail and Distribution" & sector == "Health Care" ~
-          "Health Care Distributors",
-        subsector == "Retail and Distribution" & sector == "Consumer Staples" ~
-          "Food & Staples Retailing",
-        subsector == "Steel and Metalurgy" ~ "Steel",
-        subsector == "Transportation Equipment and Components" ~
-          "Transportation Equipment",
-        subsector == "Diversified" & sector == "Consumer Discretionary" ~
-          "Broadline Retail",
-        is.na(subsector) ~ "Uncategorized",
-        TRUE ~ subsector
+      # find out the complete download path. If windows or linux
+      download_dir <- ifelse(
+        grepl("windows", tolower(Sys.info()[["sysname"]])),
+        file.path(Sys.getenv("USERPROFILE"), download_dir),
+        file.path(Sys.getenv("HOME"), download_dir)
       )
-    )
+
+      # Wait dynamically for file download
+      wait_for_file <- function(pattern, dir = download_dir, timeout = 5) {
+        start <- Sys.time()
+        repeat {
+          files <- list.files(path = dir, pattern = pattern, full.names = TRUE)
+          if (length(files) >= 1) {
+            return(files[[1]])
+          }
+          if (
+            as.numeric(difftime(Sys.time(), start, units = "secs")) > timeout
+          ) {
+            stop("Timeout waiting for B3 CSV download")
+          }
+          Sys.sleep(1)
+        }
+      }
+
+      file_path <- wait_for_file(pattern = "IBOVDia", download_dir)
+
+      # Read downloaded CSV
+      # suppress warnings about parsing failures
+      b3_list <- suppressMessages(suppressWarnings(
+        readr::read_csv(file_path, skip = 1) %>%
+          slice(1:(n() - 2)) %>% # remove last 2 summary rows
+          rename(BRX.code = Code) %>%
+          mutate(BRX.code = paste0(BRX.code, ".SA"))
+      ))
+
+      # Remove the file
+      file.remove(file_path)
+
+      # Join and clean
+      valid_stocks_br <- b3_list %>%
+        rename(symbol = BRX.code) %>%
+        mutate(link = gsub("[0-9]+\\.SA$", "", symbol)) %>%
+        left_join(b3_class, by = c("link" = "symbol")) %>%
+        arrange(desc(`Part. (%)`)) %>%
+        mutate(
+          market_cap = `Theoretical Quantity`, # price not available here; calculate externally
+          price = NA_real_,
+          estimated_tot_shares = `Theoretical Quantity`,
+          coin = "BRL",
+          weight = `Part. (%)` / 100,
+          date_updated = as.Date(Sys.Date()),
+          source = url,
+          index = "B3",
+          name = coalesce(company_name, Stock),
+          rank = row_number()
+        ) %>%
+        select(
+          symbol,
+          name,
+          sector,
+          subsector,
+          market_cap,
+          estimated_tot_shares,
+          price,
+          coin,
+          weight,
+          date_updated,
+          source,
+          index,
+          rank
+        ) %>%
+        # Standardize sector/subsector
+        mutate(
+          sector = case_when(
+            sector %in% c("Consumer Non Cyclical", "Consumer Staples") ~
+              "Consumer Staples",
+            sector %in% c("Consumer Cyclical", "Consumer Discretionary") ~
+              "Consumer Discretionary",
+            sector %in% c("Oil, Gas and Biofuels", "Energy") ~ "Energy",
+            sector %in% c("Basic Materials", "Materials") ~ "Materials",
+            sector %in% c("Health", "Health Care") ~ "Health Care",
+            sector %in% c("Financial", "Financials") ~ "Financials",
+            sector %in% c("Communications", "Communication Services") ~
+              "Communication Services",
+            sector == "Capital Goods and Services" ~ "Industrials",
+            TRUE ~ sector
+          ),
+          subsector = case_when(
+            subsector == "Mining" ~ "Metals & Mining",
+            subsector == "Oil, Gas and Biofuels" ~
+              "Oil & Gas Exploration & Production",
+            subsector == "Financial Intermediaries" ~ "Diversified Financials",
+            subsector ==
+              "Medical and Hospitalar Services, Analysis and Diagnostics" ~
+              "Health Care Services",
+            subsector == "Retail and Distribution" & sector == "Health Care" ~
+              "Health Care Distributors",
+            subsector == "Retail and Distribution" &
+              sector == "Consumer Staples" ~
+              "Food & Staples Retailing",
+            subsector == "Steel and Metalurgy" ~ "Steel",
+            subsector == "Transportation Equipment and Components" ~
+              "Transportation Equipment",
+            subsector == "Diversified" & sector == "Consumer Discretionary" ~
+              "Broadline Retail",
+            is.na(subsector) ~ "Uncategorized",
+            TRUE ~ subsector
+          )
+        )
+      return(valid_stocks_br)
+    },
+    error = function(e) {
+      warning("Error while scraping B3 data: ", e$message)
+      return(NULL)
+    },
+    finally = {
+      # ensure browser closes
+      remDr$close()
+      driver$server$stop()
+    }
+  )
 
   return(valid_stocks_br)
 }
