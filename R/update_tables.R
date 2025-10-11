@@ -100,23 +100,24 @@ update_benchmarks <- function(db_con, new_benchmarks = NULL) {
 
   # Check if the benchmark symbols table already exists in the database
   table_exists <- DBI::dbExistsTable(db_con, "benchmark_symbols")
+  if (table_exists & is.null(new_benchmarks)) {
+    message(
+      "The table benchmark_symbols already exists. Provide new_benchmarks to add new symbols."
+    )
+    return(invisible(NULL))
+  }
 
   if (!table_exists) {
     # If the table does not exist, create it and insert all base benchmark symbols
     # Create the benchmark symbols data frame
     base_benchmarks <- create_benchmarks()
 
-    DBI::dbWriteTable(db_con, "benchmark_symbols", new_benchmarks)
+    DBI::dbWriteTable(db_con, "benchmark_symbols", base_benchmarks)
     message("Base Benchmark symbols table created and populated successfully.")
   }
 
   # If the table exists, check for new benchmark symbols to add
-  if (is.null(new_benchmarks)) {
-    # Nothing to add, exit the function
-    message(
-      "No new symbols provided to add."
-    )
-  } else {
+  if (!is.null(new_benchmarks)) {
     # Ensure new_benchmarks has the correct structure
     required_cols <- c("symbol", "name", "index", "source")
 
@@ -144,7 +145,7 @@ update_benchmarks <- function(db_con, new_benchmarks = NULL) {
       )
       message(paste(
         nrow(new_benchmarks),
-        "new benchmark symbols added to the database."
+        "New benchmark symbols added to the database."
       ))
     } else {
       message(

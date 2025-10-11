@@ -4,7 +4,7 @@
 \alias{update_symbols_table}
 \title{Update the table with all symbols basic information}
 \usage{
-update_symbols_table(indexes = NULL, db_con)
+update_symbols_table(indexes = NULL, db_con, save_data = TRUE)
 }
 \arguments{
 \item{indexes}{A character vector specifying which indexes to filter by. Options include "ASX", "B3", "SP500", and "Benchmark". If NULL, returns all symbols.}
@@ -22,8 +22,11 @@ It fetches data from the ASX, B3, and S&P 500 indexes, combines them, and update
 }
 \examples{
 \dontrun{
-# Establish a database connection
-db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = "path_to_your_db.duckdb", read_only = FALSE)
+# define the path and name of the database file
+db_name <- "test_stock_db"
+db_path <- file.path(tempdir(), db_name)
+# create the database connection
+db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
 # Update the symbols table
 update_symbols_table(indexes = c("ASX", "B3"), db_con = db_con)
 DBI::dbDisconnect(db_con)

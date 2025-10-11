@@ -1,9 +1,9 @@
 Package: invest.stock.db
-Title: manage stock data in my duckdb database, including it fetching from the internet
+Title: Manage stock data in my DuckDB database, including fetching it from the internet
 Version: 1.0
 Authors@R: 
-    person("Henrique", "Ramos", "hanatole@gmail.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
+    person("Henrique", "Ramos", email = "hanatole@gmail.com", role = c("aut", "cre"))
+Description: Tools to manage, fetch, and store stock data in a local DuckDB database for analysis and backtesting.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
@@ -16,6 +16,7 @@ Imports:
     RSelenium,
     rvest,
     stringr,
+    tibble,
     tidyquant
 Suggests: 
     knitr,

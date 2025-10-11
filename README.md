@@ -1,44 +1,42 @@
----
-output: github_document
----
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
-
-```{r, include = FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>",
-  fig.path = "man/figures/README-",
-  out.width = "100%"
-)
-```
 
 # invest.stock.db
 
 <!-- badges: start -->
+
 <!-- badges: end -->
 
-The goal of invest.stock.db is to support the creation of a structured database for stock data to facilitate investment analysis.
-
+The goal of invest.stock.db is to support the creation of a structured
+database for stock data to facilitate investment analysis.
 
 ## Step by step example
 
-The step by step below will allow you to create your own database. The invest.stock.db package will create it using duckdb and save it in a single file you can later use to connect and query. Therefore, the file name and path are the first variables to define, and this will be used to create the database connection.
+The step by step below will allow you to create your own database. The
+invest.stock.db package will create it using duckdb and save it in a
+single file you can later use to connect and query. Therefore, the file
+name and path are the first variables to define, and this will be used
+to create the database connection.
 
-```{r example}
+``` r
 # load the package
 library(invest.stock.db)
+#> Warning: replacing previous import 'readr::guess_encoding' by
+#> 'rvest::guess_encoding' when loading 'invest.stock.db'
+#> Registered S3 method overwritten by 'quantmod':
+#>   method            from
+#>   as.zoo.data.frame zoo
 # define the path and name of the database file
 db_name <- "test_stock_db"
 db_path <- file.path(tempdir(), db_name)
 
 # create the database connection
 db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
-
 ```
 
 # Check the database structure and contents
-```{r check_db, results='asis'}
+
+``` r
 # check the connection
 if (!grepl("connection", class(db_con))) {
     stop("Failed to connect to the database.")
@@ -46,11 +44,11 @@ if (!grepl("connection", class(db_con))) {
 
 # List tables in the database. For this example, we expect to see nothing as we have not populated it yet.
 tables <- DBI::dbListTables(db_con)
-
 ```
 
-# The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database. 
-```{r symbols, results='asis'}
+# The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database.
+
+``` r
 
 # all_symbols <- load_all_symbols(
 
@@ -64,12 +62,7 @@ tables <- DBI::dbListTables(db_con)
 
 # # disconnect when done
 # DBI::dbDisconnect(db_con, shutdown = TRUE)
-
 ```
-
-
-
-
 
 ## Installation
 
@@ -78,5 +71,4 @@ You can install the development version of yourpackage from GitHub:
 ``` r
 # install.packages("remotes")
 remotes::install_github("henrique-anatole/invest.data")
-
 ```

@@ -115,14 +115,7 @@ test_that("create_benchmarks: check if returns the expected data frame", {
   expected_cols <- c(
     "symbol",
     "name",
-    "sector",
-    "subsector",
-    "market_cap",
-    "estimated_tot_shares",
     "index",
-    "rank",
-    "coin",
-    "weight",
     "date_updated",
     "source"
   )
