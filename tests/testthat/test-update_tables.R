@@ -63,6 +63,19 @@ test_that("update_benchmarks: new benchmarks", {
     regexp = "New benchmark symbols added to the database."
   )
 
+  # Missing columns
+  new_bad_benchmarks <- data.frame(
+    symbol = c("^NEW1", "^NEW2"),
+    index = c("New Index 1", "New Index 2"),
+    source = c("Yahoo Finance", "Yahoo Finance"),
+    stringsAsFactors = FALSE
+  )
+
+  expect_error(
+    update_benchmarks(db_con = db_con, new_benchmarks = new_bad_benchmarks),
+    regexp = "The new_benchmarks data frame must contain the following columns:"
+  )
+
   # Check that the new benchmarks were added
   updated_benchmarks <- DBI::dbReadTable(db_con, "benchmark_symbols")
   expect_true(all(new_benchmarks$symbol %in% updated_benchmarks$symbol))
