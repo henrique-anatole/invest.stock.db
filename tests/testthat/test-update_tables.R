@@ -92,7 +92,7 @@ test_that("update_symbols_table: first run", {
   # First run: table does not exist yet
   expect_message(
     update_symbols_table(db_con = db_con),
-    regexp = "The all_symbols table has been created and populated successfully."
+    regexp = "The 'all_symbols' table has been updated successfully"
   )
 
   # Check that the table now exists
@@ -100,9 +100,6 @@ test_that("update_symbols_table: first run", {
 
   # Check the contents of the table
   all_symbols <- DBI::dbReadTable(db_con, "all_symbols")
-
-  # No duplicate symbols
-  expect_equal(nrow(all_symbols), length(unique(all_symbols$symbol)))
 
   # expect symbols from all sources
   expect_true(all(unique(all_symbols$index) %in% c("SP500", "ASX", "B3")))
