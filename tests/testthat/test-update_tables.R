@@ -81,3 +81,78 @@ test_that("update_benchmarks: new benchmarks", {
 
   DBI::dbDisconnect(db_con)
 })
+
+test_that("update_symbols_table: first run", {
+  # define the path and name of the database file
+  db_name <- "test_stock_db"
+  db_path <- file.path(tempdir(), db_name)
+  # create the database connection
+  db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+
+  # First run: table does not exist yet
+  expect_message(
+    update_symbols_table(db_con = db_con),
+    regexp = "The all_symbols table has been created and populated successfully."
+  )
+
+  # Check that the table now exists
+  expect_true(DBI::dbExistsTable(db_con, "all_symbols"))
+
+  # Check the contents of the table
+  all_symbols <- DBI::dbReadTable(db_con, "all_symbols")
+
+  # No duplicate symbols
+  expect_equal(nrow(all_symbols), length(unique(all_symbols$symbol)))
+
+  # expect symbols from all sources
+  expect_true(all(unique(all_symbols$index) %in% c("SP500", "ASX", "B3")))
+
+  # delete the table created
+  DBI::dbRemoveTable(db_con, "all_symbols")
+
+  DBI::dbDisconnect(db_con)
+})
+
+test_that("update_symbols_table: null conection", {
+  expect_error(
+    update_symbols_table(db_con = NULL),
+    regexp = "Invalid or NULL database connection provided."
+  )
+})
+
+test_that("update_symbols_table: dont save", {
+  # define the path and name of the database file
+  db_name <- "test_stock_db"
+  db_path <- file.path(tempdir(), db_name)
+  # create the database connection
+  db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+
+  # First run: table does not exist yet
+  all_symbols = update_symbols_table(db_con = db_con, save_data = FALSE)
+
+  # Check that the table now does not exist
+  expect_false(DBI::dbExistsTable(db_con, "all_symbols"))
+
+  # Check the contents of the returned data frame
+  expect_true(nrow(all_symbols) > 0)
+
+  # All sources are present
+  expect_true(all(unique(all_symbols$index) %in% c("SP500", "ASX", "B3")))
+
+  DBI::dbDisconnect(db_con)
+})
+
+test_that("update_symbols_table: invalid index", {
+  # define the path and name of the database file
+  db_name <- "test_stock_db"
+  db_path <- file.path(tempdir(), db_name)
+  # create the database connection
+  db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+
+  expect_error(
+    update_symbols_table(db_con = db_con, indexes = c("INVALID_INDEX")),
+    regexp = "Invalid index provided. Valid options are:"
+  )
+
+  DBI::dbDisconnect(db_con)
+})
