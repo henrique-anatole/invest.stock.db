@@ -8,6 +8,10 @@
 #' @param db_con A DBI database connection object.
 #' @return Nothing. The function updates the 'all_symbols' table in the database, informing the user of the update status.
 #'
+#' @import invest.data
+#' @import DBI
+#' @import duckdb
+#'
 #' @examples
 #' \dontrun{
 #' # define the path and name of the database file
@@ -79,6 +83,11 @@ update_symbols_table <- function(indexes = NULL, db_con, save_data = TRUE) {
 #' Despite having the same structure as 'all_symbols', the 'benchmark_symbols' are not expecting data changes, therefore, no updates are usually needed.
 #'
 #' @return Nothing. The function updates the 'benchmark_symbols' table in the database.
+#'
+#' @import invest.data
+#' @import DBI
+#' @import duckdb
+#'
 #' @examples
 #' \dontrun{
 #' # define the path and name of the database file

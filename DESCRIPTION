@@ -12,6 +12,7 @@ Imports:
     DBI,
     dplyr,
     duckdb,
+    invest.data,
     readr,
     RSelenium,
     rvest,
