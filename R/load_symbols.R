@@ -25,7 +25,7 @@
 #' dbDisconnect(db_con)
 #' }
 #'
-load_symbols <- function(db_con) {
+load_all_symbols <- function(db_con) {
   # # check the connection
   if (!grepl("connection", class(db_con))) {
     stop("Failed to connect to the database.")
@@ -36,35 +36,46 @@ load_symbols <- function(db_con) {
     stop("Table 'all_symbols' does not exist in the database.")
   }
   # query the database to check if the data was written
-  all_symbol_data = dbGetQuery(db_con, "SELECT * FROM all_symbols") %>%
+  all_symbols = dbGetQuery(db_con, "SELECT * FROM all_symbols") %>%
     filter(symbol != "-")
 
   # Check if data was retrieved
-  if (nrow(all_symbol_data) == 0) {
+  if (nrow(all_symbols) == 0) {
     stop("No data found in the 'all_symbols' table.")
   }
 
+  # query the benchmarks table
+  benchmark_symbols <- DBI::dbReadTable(db_con, "benchmark_symbols")
+
+  # check if data was retrieved
+  if (nrow(benchmark_symbols) == 0) {
+    stop("No data found in the 'benchmark_symbols' table.")
+  }
+
+  # all symbols data
+  all_symbols <- all_symbols %>%
+    bind_rows(benchmark_symbols) %>%
+    arrange(index, symbol) %>%
+    distinct()
+
   # # get the symbols from AUS
-  all_symbols_au <- all_symbol_data %>%
+  all_symbols_au <- all_symbols %>%
     filter(index == "ASX")
 
   # # get the symbols from BRA
-  all_symbols_br <- all_symbol_data %>%
+  all_symbols_br <- all_symbols %>%
     filter(index == "B3")
 
   # Get the rest of the data for USA symbols
-  all_symbols_sp500 <- all_symbol_data %>%
+  all_symbols_sp500 <- all_symbols %>%
     filter(index == "SP500")
 
   # Get benchmarks for comparisons
-  all_benchmarks <- all_symbol_data %>%
+  all_benchmarks <- all_symbols %>%
     filter(index == "Benchmark")
 
-  # disconnect from the database
-  dbDisconnect(db_con)
-
   return(list(
-    all_symbol_data = all_symbol_data,
+    all_symbols = all_symbols,
     all_symbols_au = all_symbols_au,
     all_symbols_br = all_symbols_br,
     all_symbols_sp500 = all_symbols_sp500,

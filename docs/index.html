@@ -5,14 +5,14 @@
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>manage stock data in my duckdb database, including it fetching from the internet • invest.stock.db</title>
+<title>Manage stock data in my DuckDB database, including fetching it from the internet • invest.stock.db</title>
 <!-- jquery --><script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js" integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script><!-- Bootstrap --><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css" integrity="sha256-bZLfwXAP04zRMK2BjiO8iu9pf4FbLqX6zitd+tIvLhE=" crossorigin="anonymous">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.4.1/js/bootstrap.min.js" integrity="sha256-nuL8/2cJ5NDSSwnKD8VqreErSWHtnEP9E7AySL+1ev4=" crossorigin="anonymous"></script><!-- bootstrap-toc --><link rel="stylesheet" href="bootstrap-toc.css">
 <script src="bootstrap-toc.js"></script><!-- Font Awesome icons --><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.12.1/css/all.min.css" integrity="sha256-mmgLkCYLUQbXn0B1SRqzHar6dCnv9oZFPEC1g1cwlkk=" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.12.1/css/v4-shims.min.css" integrity="sha256-wZjR52fzng1pJHwx4aV2AO3yyTOXrcDW7jBpJtTwVxw=" crossorigin="anonymous">
 <!-- clipboard.js --><script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.6/clipboard.min.js" integrity="sha256-inc5kl9MA1hkeYUt+EC3BhlIgyp/2jDIyBLS6k3UxPI=" crossorigin="anonymous"></script><!-- headroom.js --><script src="https://cdnjs.cloudflare.com/ajax/libs/headroom/0.11.0/headroom.min.js" integrity="sha256-AsUX4SJE1+yuDu5+mAVzJbuYNPHj/WroHuZ8Ir/CkE0=" crossorigin="anonymous"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/headroom/0.11.0/jQuery.headroom.min.js" integrity="sha256-ZX/yNShbjqsohH1k95liqY9Gd8uOiE1S4vZc+9KQ1K4=" crossorigin="anonymous"></script><!-- pkgdown --><link href="pkgdown.css" rel="stylesheet">
-<script src="pkgdown.js"></script><meta property="og:title" content="manage stock data in my duckdb database, including it fetching from the internet">
-<meta property="og:description" content="What the package does (one paragraph).">
+<script src="pkgdown.js"></script><meta property="og:title" content="Manage stock data in my DuckDB database, including fetching it from the internet">
+<meta property="og:description" content="Tools to manage, fetch, and store stock data in a local DuckDB database for analysis and backtesting.">
 <!-- mathjax --><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js" integrity="sha256-nvJJv9wWKEm88qvoQl9ekL2J+k/RWIsaSScxxlsrv8k=" crossorigin="anonymous"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/config/TeX-AMS-MML_HTMLorMML.js" integrity="sha256-84DKXVJXs0/F8OTMzX4UR909+jtl4G7SPypPavF+GfA=" crossorigin="anonymous"></script><!--[if lt IE 9]>
 <script src="https://oss.maxcdn.com/html5shiv/3.7.3/html5shiv.min.js"></script>
 <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
@@ -33,7 +33,7 @@
       </button>
       <span class="navbar-brand">
         <a class="navbar-link" href="index.html">invest.stock.db</a>
-        <span class="version label label-default" data-toggle="tooltip" data-placement="bottom" title="">0.0.0.9000</span>
+        <span class="version label label-default" data-toggle="tooltip" data-placement="bottom" title="">1.0</span>
       </span>
     </div>
 
@@ -52,6 +52,9 @@
 <li>
       <a href="articles/browse_stock_data.html">browse_stock_data</a>
     </li>
+    <li>
+      <a href="articles/my_new_stock_db.html">my_new_stock_db</a>
+    </li>
   </ul>
 </li>
       </ul>
@@ -67,7 +70,72 @@
 
       </header><div class="row">
   <div class="contents col-md-9">
-What the package does (one paragraph).
+
+<div class="section level1">
+<div class="page-header"><h1 id="investstockdb">invest.stock.db<a class="anchor" aria-label="anchor" href="#investstockdb"></a>
+</h1></div>
+<!-- badges: start -->
+<!-- badges: end -->
+<p>The goal of invest.stock.db is to support the creation of a structured database for stock data to facilitate investment analysis.</p>
+<div class="section level2">
+<h2 id="step-by-step-example">Step by step example<a class="anchor" aria-label="anchor" href="#step-by-step-example"></a>
+</h2>
+<p>The step by step below will allow you to create your own database. The invest.stock.db package will create it using duckdb and save it in a single file you can later use to connect and query. Therefore, the file name and path are the first variables to define, and this will be used to create the database connection.</p>
+<div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># load the package</span></span>
+<span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va">invest.stock.db</span><span class="op">)</span></span>
+<span><span class="co">#&gt; Warning: replacing previous import 'readr::guess_encoding' by</span></span>
+<span><span class="co">#&gt; 'rvest::guess_encoding' when loading 'invest.stock.db'</span></span>
+<span><span class="co">#&gt; Registered S3 method overwritten by 'quantmod':</span></span>
+<span><span class="co">#&gt;   method            from</span></span>
+<span><span class="co">#&gt;   as.zoo.data.frame zoo</span></span>
+<span><span class="co"># define the path and name of the database file</span></span>
+<span><span class="va">db_name</span> <span class="op">&lt;-</span> <span class="st">"test_stock_db"</span></span>
+<span><span class="va">db_path</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/file.path.html" class="external-link">file.path</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir</a></span><span class="op">(</span><span class="op">)</span>, <span class="va">db_name</span><span class="op">)</span></span>
+<span></span>
+<span><span class="co"># create the database connection</span></span>
+<span><span class="va">db_con</span> <span class="op">&lt;-</span> <span class="fu">DBI</span><span class="fu">::</span><span class="fu"><a href="https://dbi.r-dbi.org/reference/dbConnect.html" class="external-link">dbConnect</a></span><span class="op">(</span><span class="fu">duckdb</span><span class="fu">::</span><span class="fu"><a href="https://r.duckdb.org/reference/duckdb.html" class="external-link">duckdb</a></span><span class="op">(</span><span class="op">)</span>, dbdir <span class="op">=</span> <span class="va">db_path</span>, read_only <span class="op">=</span> <span class="cn">FALSE</span><span class="op">)</span></span></code></pre></div>
+</div>
+</div>
+<div class="section level1">
+<h1 id="check-the-database-structure-and-contents">Check the database structure and contents<a class="anchor" aria-label="anchor" href="#check-the-database-structure-and-contents"></a>
+</h1>
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># check the connection</span></span>
+<span><span class="kw">if</span> <span class="op">(</span><span class="op">!</span><span class="fu"><a href="https://rdrr.io/r/base/grep.html" class="external-link">grepl</a></span><span class="op">(</span><span class="st">"connection"</span>, <span class="fu"><a href="https://rdrr.io/r/base/class.html" class="external-link">class</a></span><span class="op">(</span><span class="va">db_con</span><span class="op">)</span><span class="op">)</span><span class="op">)</span> <span class="op">{</span></span>
+<span>    <span class="kw"><a href="https://rdrr.io/r/base/stop.html" class="external-link">stop</a></span><span class="op">(</span><span class="st">"Failed to connect to the database."</span><span class="op">)</span></span>
+<span>  <span class="op">}</span></span>
+<span></span>
+<span><span class="co"># List tables in the database. For this example, we expect to see nothing as we have not populated it yet.</span></span>
+<span><span class="va">tables</span> <span class="op">&lt;-</span> <span class="fu">DBI</span><span class="fu">::</span><span class="fu"><a href="https://dbi.r-dbi.org/reference/dbListTables.html" class="external-link">dbListTables</a></span><span class="op">(</span><span class="va">db_con</span><span class="op">)</span></span></code></pre></div>
+</div>
+<div class="section level1">
+<h1 id="the-first-table-to-populate-is-the-all_symbols-table-which-contains-the-list-of-stock-symbols-we-will-work-with-in-the-database">The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database.<a class="anchor" aria-label="anchor" href="#the-first-table-to-populate-is-the-all_symbols-table-which-contains-the-list-of-stock-symbols-we-will-work-with-in-the-database"></a>
+</h1>
+<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span></span>
+<span><span class="co"># all_symbols &lt;- load_all_symbols(</span></span>
+<span></span>
+<span><span class="co"># # check if all_symbols table exists</span></span>
+<span><span class="co"># if (!"all_symbols" %in% tables) {</span></span>
+<span><span class="co">#     stop("Table 'all_symbols' does not exist in the database.")</span></span>
+<span><span class="co">#   }</span></span>
+<span></span>
+<span><span class="co"># # get the list of symbols</span></span>
+<span><span class="co"># all_symbols &lt;- invest.stock.db::get_symbols(db_con)</span></span>
+<span></span>
+<span><span class="co"># # disconnect when done</span></span>
+<span><span class="co"># DBI::dbDisconnect(db_con, shutdown = TRUE)</span></span></code></pre></div>
+<div class="section level2">
+<h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
+</h2>
+<p>You can install the development version of yourpackage from GitHub:</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="co"># install.packages("remotes")</span></span>
+<span><span class="fu">remotes</span><span class="fu">::</span><span class="fu"><a href="https://remotes.r-lib.org/reference/install_github.html" class="external-link">install_github</a></span><span class="op">(</span><span class="st">"henrique-anatole/invest.data"</span><span class="op">)</span></span></code></pre></div>
+</div>
+</div>
+
   </div>
 
   <div class="col-md-3 hidden-xs hidden-sm" id="pkgdown-sidebar">
@@ -90,7 +158,7 @@ What the package does (one paragraph).
 <div class="developers">
 <h2 data-toc-skip>Developers</h2>
 <ul class="list-unstyled">
-<li>First Last <br><small class="roles"> Author, maintainer </small>   </li>
+<li>Henrique Ramos <br><small class="roles"> Author, maintainer </small>   </li>
 </ul>
 </div>
 
@@ -102,7 +170,7 @@ What the package does (one paragraph).
 
       <footer><div class="copyright">
   <p></p>
-<p>Developed by First Last.</p>
+<p>Developed by Henrique Ramos.</p>
 </div>
 
 <div class="pkgdown">

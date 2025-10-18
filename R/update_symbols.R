@@ -25,7 +25,7 @@
 #' }
 #' @export
 #'
-update_symbols_table <- function(indexes = NULL, db_con, save_data = TRUE) {
+update_symbols_table <- function(db_con, indexes = NULL, save_data = TRUE) {
   # Validate the database connection
   if (is.null(db_con) || !DBI::dbIsValid(db_con)) {
     stop("Invalid or NULL database connection provided.")

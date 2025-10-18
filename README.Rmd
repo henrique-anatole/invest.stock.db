@@ -20,6 +20,15 @@ knitr::opts_chunk$set(
 
 The goal of invest.stock.db is to support the creation of a structured database for stock data to facilitate investment analysis.
 
+## Installation
+
+You can install the development version of yourpackage from GitHub:
+
+``` r
+# install.packages("remotes")
+remotes::install_github("henrique-anatole/invest.data", dependencies = TRUE)
+
+```
 
 ## Step by step example
 
@@ -52,18 +61,37 @@ tables <- DBI::dbListTables(db_con)
 # The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database. 
 ```{r symbols, results='asis'}
 
-# all_symbols <- load_all_symbols(
+# get the list of symbols and save it to the all_symbols table
+update_symbols_table(db_con, save_data = TRUE)
 
-# # check if all_symbols table exists
-# if (!"all_symbols" %in% tables) {
-#     stop("Table 'all_symbols' does not exist in the database.")
-#   }
+# Check the contents of the all_symbols table
+all_symbols <- DBI::dbReadTable(db_con, "all_symbols")
+head(all_symbols)
 
-# # get the list of symbols
-# all_symbols <- invest.stock.db::get_symbols(db_con)
+tables <- DBI::dbListTables(db_con)
+dim(all_symbols)
 
-# # disconnect when done
-# DBI::dbDisconnect(db_con, shutdown = TRUE)
+# get the list of benchmark symbols and save it to the benchmark_symbols table
+update_benchmarks(db_con)
+# Check the contents of the benchmark_symbols table
+benchmark_symbols <- DBI::dbReadTable(db_con, "benchmark_symbols")
+head(benchmark_symbols)
+
+# Load everything at once and check the tables again
+all_symbols <- load_all_symbols(db_con)
+head(all_symbols$all_symbols)
+head(all_symbols$all_symbols_au)
+head(all_symbols$all_symbols_br)
+head(all_symbols$all_symbols_sp500)
+head(all_symbols$all_benchmarks)
+```
+
+# The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database. 
+```{r symbols, results='asis'}
+
+
+# disconnect when done
+DBI::dbDisconnect(db_con, shutdown = TRUE)
 
 ```
 
@@ -71,12 +99,3 @@ tables <- DBI::dbListTables(db_con)
 
 
 
-## Installation
-
-You can install the development version of yourpackage from GitHub:
-
-``` r
-# install.packages("remotes")
-remotes::install_github("henrique-anatole/invest.data")
-
-```
