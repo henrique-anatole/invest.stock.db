@@ -57,8 +57,12 @@ if (!grepl("connection", class(db_con))) {
 tables <- DBI::dbListTables(db_con)
 
 ```
+# Symbols data
 
-# The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database. 
+## Get basic data for all symbols
+
+The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database. 
+
 ```{r symbols, results='asis'}
 
 # get the list of symbols and save it to the all_symbols table
@@ -86,8 +90,34 @@ head(all_symbols$all_symbols_sp500)
 head(all_symbols$all_benchmarks)
 ```
 
-# The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database. 
-```{r symbols, results='asis'}
+## Filtering the data
+
+Next, I'll filter the symbols I will get more data for, because the database can get quite large if I try to get data for all symbols. 
+
+```{r filter-symbols, results='asis'}
+# Filter all SP500 symbols, plus the top 100 by rank for ASX and Bovespa
+filtered_symbols <- all_symbols$all_symbols_sp500 %>% 
+  dplyr::bind_rows(
+    all_symbols$all_symbols_au %>% dplyr::slice_max(rank, n = 100)
+  ) %>%
+  dplyr::bind_rows(
+    all_symbols$all_symbols_br %>% dplyr::slice_max(rank, n = 100)
+  ) %>% 
+  dplyr::bind_rows(
+    all_symbols$all_benchmarks
+  ) %>% 
+  dplyr::distinct()
+
+# Check the filtered symbols
+head(filtered_symbols)
+
+```
+
+# Price time series data
+
+Once I have the list of symbols I want to work with, I can proceed to get the price time series data for those symbols and populate the prices table in the database. I will start with the daily data.
+
+```{r filter-symbols, results='asis'}
 
 
 # disconnect when done
