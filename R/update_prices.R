@@ -4,8 +4,7 @@
 #' It uses the `invest.data` package to fetch the data and updates the database accordingly.
 #'
 #' @param db_con A DBI database connection object.
-#' @param symbols A character vector of stock symbols to update. If NULL, updates all symbols in the 'all_symbols' table.
-#' @param symbol_type A character string indicating the type of symbols: "stock" or "crypto".
+#' @param symbols_to_get A character vector of stock symbols to update. If NULL, updates all symbols in the 'all_symbols' table.
 #' @param start_date A character string representing the start date for fetching data (format: "YYYY-MM-DD").
 #' @param interval A character string representing the data interval (e.g., "1d" for daily).
 #'
@@ -15,18 +14,23 @@
 #' @import dplyr
 #'
 #' @example path.R
-
-# define the path and name of the database file
-db_name <- "stock_data - Copia.duckdb"
-db_path <- file.path("/mnt/nas_nuvens/stock_data/", db_name)
-
-# create the database connection
-db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
-
-symbols_to_get <- filtered_symbols$symbol
-start_date = "2014-01-01"
-interval = "1d"
-
+#' \dontrun{
+#' db_file <- "/mnt/nas_nuvens/stock_data/stock_data - Copia.duckdb"
+#' # create a connection to the database
+#' db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_file, read_only = FALSE)
+#' # Check the table contents before updating
+#' symbols_to_get <- c("AAPL", "MSFT")
+#' # Current data in the database
+#' symbols_before <- dbGetQuery(db_con, "SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol")
+#' print(symbols_before)
+#' #' # Update stock prices
+#' update_stock_prices(db_con, symbols_to_get = c("AAPL", "MSFT"), start_date = "2020-01-01", interval = "1d")
+#' # Check the table contents after updating
+#' symbols_after <- dbGetQuery(db_con, "SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol")
+#' print(symbols_after)
+#' dbDisconnect(db_con)
+#' }
+#' @export
 update_stock_prices <- function(
   db_con,
   symbols_to_get = NULL,
@@ -44,29 +48,47 @@ update_stock_prices <- function(
     symbols_to_get <- unique(symbols_df$symbol)
   }
 
+  # stop if the interval is not valid
+  valid_intervals <- c("1d", "1h")
+  if (!(interval %in% valid_intervals)) {
+    stop(paste0(
+      "Invalid interval provided. Valid intervals are: ",
+      paste(valid_intervals, collapse = ", ")
+    ))
+  }
+
   # Check if start_date is valid
   invest.data::is_valid_date(start_date)
   symbol_type <- "stock" # "stock"
   end_date <- as.character(Sys.Date())
 
   # check the data already in the database to avoid duplications
-  # Does the table daily_prices exist?
-  if ("daily_prices" %in% DBI::dbListTables(db_con)) {
+  db_table <- case_when(
+    interval == "1d" ~ "daily_prices",
+    interval == "1h" ~ "hourly_prices"
+  )
+
+  # Does the table required exist?
+  if (eval(parse(text = paste0("db_table %in% DBI::dbListTables(db_con)")))) {
     # Check the data available in the database
-    db_daily_summary <- DBI::dbGetQuery(
+    db_table_summary <- DBI::dbGetQuery(
       db_con,
-      "SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol"
+      paste0(
+        "SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM ",
+        db_table,
+        " GROUP BY symbol"
+      )
     )
 
     # Which symbols_to_get are missing in the database?
     missing_symbols <- symbols_to_get %>%
       as.data.frame() %>%
       rename(symbol = ".") %>%
-      anti_join(db_daily_summary, by = "symbol") %>%
+      anti_join(db_table_summary, by = "symbol") %>%
       pull(symbol)
 
-    d_timeseries <- NULL
-    d_timeseries_error <- NULL
+    prices_data <- NULL
+    prices_data_error <- NULL
 
     for (symbol in missing_symbols) {
       print(paste0("Getting data for missing symbol: ", symbol))
@@ -79,19 +101,19 @@ update_stock_prices <- function(
         end_date = end_date
       )
 
-      d_timeseries <- bind_rows(d_timeseries, price_data$data) %>%
+      prices_data <- bind_rows(prices_data, price_data$data) %>%
         distinct()
-      d_timeseries_error <- bind_rows(d_timeseries_error, price_data$errors) %>%
+      prices_data_error <- bind_rows(prices_data_error, price_data$errors) %>%
         distinct()
     }
 
-    # check if there is duplicated data in d_timeseries
-    d_timeseries <- d_timeseries %>%
+    # check if there is duplicated data in prices_data
+    prices_data <- prices_data %>%
       distinct()
     # check if any data is already in the database to avoid duplications
     daily_prices <- dbGetQuery(db_con, "SELECT * FROM daily_prices")
     # Remove any overlapping data to avoid duplication
-    d_timeseries_rev <- d_timeseries %>%
+    prices_data_rev <- prices_data %>%
       anti_join(
         daily_prices,
         by = c("symbol", "open_time", "close", "high", "low", "open", "volume")
@@ -99,10 +121,10 @@ update_stock_prices <- function(
       distinct()
 
     # Add the new lines to the table "daily_prices" in the database
-    dbWriteTable(db_con, "daily_prices", d_timeseries_rev, append = TRUE)
+    dbWriteTable(db_con, "daily_prices", prices_data_rev, append = TRUE)
 
-    # update the db_daily_summary after adding missing symbols
-    db_daily_summary <- DBI::dbGetQuery(
+    # update the db_table_summary after adding missing symbols
+    db_table_summary <- DBI::dbGetQuery(
       db_con,
       "SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol"
     )
@@ -111,7 +133,7 @@ update_stock_prices <- function(
     still_missing_symbols <- symbols_to_get %>%
       as.data.frame() %>%
       rename(symbol = ".") %>%
-      anti_join(db_daily_summary, by = "symbol") %>%
+      anti_join(db_table_summary, by = "symbol") %>%
       pull(symbol)
 
     if (length(still_missing_symbols) > 0) {
@@ -125,14 +147,14 @@ update_stock_prices <- function(
     other_symbols <- symbols_to_get[!symbols_to_get %in% missing_symbols]
 
     # Loop through each symbol and update data
-    d_timeseries <- NULL
-    d_timeseries_error <- NULL
+    prices_data <- NULL
+    prices_data_error <- NULL
 
     for (symbol in other_symbols) {
       print(paste0("Updating data for symbol: ", symbol))
 
-      # Get the last date for the symbol from db_daily_summary
-      last_date <- db_daily_summary %>%
+      # Get the last date for the symbol from db_table_summary
+      last_date <- db_table_summary %>%
         filter(symbol == !!symbol) %>%
         pull(last_date)
 
@@ -144,14 +166,14 @@ update_stock_prices <- function(
         end_date = end_date
       )
 
-      d_timeseries <- bind_rows(d_timeseries, price_data$data)
-      d_timeseries_error <- bind_rows(d_timeseries_error, price_data$errors)
+      prices_data <- bind_rows(prices_data, price_data$data)
+      prices_data_error <- bind_rows(prices_data_error, price_data$errors)
     }
 
     # Load existing daily prices from the database
     daily_prices <- dbGetQuery(db_con, "SELECT * FROM daily_prices")
     # Remove any overlapping data to avoid duplication
-    d_timeseries_rev <- d_timeseries %>%
+    prices_data_rev <- prices_data %>%
       anti_join(
         daily_prices,
         by = c("symbol", "open_time", "close", "high", "low", "open", "volume")
@@ -159,7 +181,7 @@ update_stock_prices <- function(
       distinct()
 
     # Add the new lines to the table "daily_prices" in the database
-    dbWriteTable(db_con, "daily_prices", d_timeseries_rev, append = TRUE)
+    dbWriteTable(db_con, db_table, prices_data_rev, append = TRUE)
   }
 
   # Which symbols_to_get need to be updated in the database?
