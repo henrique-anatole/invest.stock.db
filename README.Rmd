@@ -37,6 +37,7 @@ The step by step below will allow you to create your own database. The invest.st
 ```{r example}
 # load the package
 library(invest.stock.db)
+
 # define the path and name of the database file
 db_name <- "test_stock_db"
 db_path <- file.path(tempdir(), db_name)
@@ -49,14 +50,13 @@ db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
 # Check the database structure and contents
 ```{r check_db, results='asis'}
 # check the connection
-if (!grepl("connection", class(db_con))) {
-    stop("Failed to connect to the database.")
-  }
+is_valid_db_connection(db_con)
 
 # List tables in the database. For this example, we expect to see nothing as we have not populated it yet.
 tables <- DBI::dbListTables(db_con)
-
+tables
 ```
+
 # Symbols data
 
 ## Get basic data for all symbols
@@ -117,7 +117,82 @@ head(filtered_symbols)
 
 Once I have the list of symbols I want to work with, I can proceed to get the price time series data for those symbols and populate the prices table in the database. I will start with the daily data.
 
-```{r filter-symbols, results='asis'}
+```{r update-prices-daily, results='asis'}
+
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT")
+start_date <- as.character(Sys.Date() - lubridate::days(200))
+interval <- "1d"
+## Create the daily prices table in this new database
+update_stock_prices(
+db_con,
+symbols_to_get,
+start_date,
+interval
+)
+## Check the contents of the daily_prices table
+loaded_data <- DBI::dbGetQuery(db_con, "SELECT * FROM daily_prices")
+# 2 Updating the existing table with new data
+## Fake the data to be old
+fake_old_date <- loaded_data %>% filter(open_time < as.character(Sys.Date() - 30))
+## write back the fake old data to the database
+DBI::dbWriteTable(db_con, "daily_prices", fake_old_date, overwrite = TRUE)
+## Check the contents of the daily_prices table
+symbols_before <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol")
+## Now run the update function again to get the missing recent data
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT", "GOOGL")
+update_stock_prices(
+db_con,
+symbols_to_get,
+start_date,
+interval
+)
+## Check the table contents after updating
+symbols_after <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol")
+
+# compare before and after
+
+```
+
+
+```{r update-prices-hour, results='asis'}
+
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT")
+start_date <- as.character(Sys.Date() - lubridate::days(7))
+interval <- "1h"
+
+load_stock_timeseries(symbols = "A8G.AX",
+   interval="1m",
+   start_date="2024-09-03",
+   end_date="2024-09-04")
+
+riingo::is_supported_ticker("CBA")
+
+## Create the daily prices table in this new database
+update_stock_prices(
+db_con,
+symbols_to_get,
+start_date,
+interval
+)
+## Check the contents of the hourly_prices table
+loaded_data <- DBI::dbGetQuery(db_con, "SELECT * FROM hourly_prices")
+# 2 Updating the existing table with new data
+## Fake the data to be old
+fake_old_date <- loaded_data %>% filter(open_time < as.character(Sys.Date() - 4))
+## write back the fake old data to the database
+DBI::dbWriteTable(db_con, "hourly_prices", fake_old_date, overwrite = TRUE)
+## Check the contents of the hourly_prices table
+symbols_before <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM hourly_prices GROUP BY symbol")
+## Now run the update function again to get the missing recent data
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT", "GOOGL")
+update_stock_prices(
+db_con,
+symbols_to_get,
+start_date,
+interval
+)
+## Check the table contents after updating
+symbols_after <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM hourly_prices GROUP BY symbol")
 
 
 # disconnect when done

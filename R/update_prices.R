@@ -61,7 +61,7 @@ update_stock_prices <- function(
   interval = "1d"
 ) {
   # ---- Validation ----
-  if (is.null(db_con) || !DBI::dbIsValid(db_con)) {
+  if (!is_valid_db_connection(db_con)) {
     stop("Invalid or NULL database connection provided.")
   }
 
