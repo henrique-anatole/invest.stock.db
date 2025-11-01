@@ -35,25 +35,20 @@ load_all_symbols <- function(db_con) {
   if (!"all_symbols" %in% DBI::dbListTables(db_con)) {
     stop("Table 'all_symbols' does not exist in the database.")
   }
+  # Check if the table 'benchmark_symbols' exists
+  if (!"benchmark_symbols" %in% DBI::dbListTables(db_con)) {
+    stop("Table 'benchmark_symbols' does not exist in the database.")
+  }
   # query the database to check if the data was written
   all_symbols = dbGetQuery(db_con, "SELECT * FROM all_symbols") %>%
     filter(symbol != "-")
 
-  # Check if data was retrieved
-  if (nrow(all_symbols) == 0) {
-    stop("No data found in the 'all_symbols' table.")
-  }
-
   # query the benchmarks table
   benchmark_symbols <- DBI::dbReadTable(db_con, "benchmark_symbols")
 
-  # check if data was retrieved
-  if (nrow(benchmark_symbols) == 0) {
-    stop("No data found in the 'benchmark_symbols' table.")
-  }
-
   # all symbols data
   all_symbols <- all_symbols %>%
+    mutate(date_updated = as.Date(date_updated)) %>%
     bind_rows(benchmark_symbols) %>%
     arrange(index, symbol) %>%
     distinct()
