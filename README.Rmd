@@ -37,9 +37,11 @@ The step by step below will allow you to create your own database. The invest.st
 ```{r example}
 # load the package
 library(invest.stock.db)
+library(tidyverse)
+library(DBI)
 
 # define the path and name of the database file
-db_name <- "test_stock_db"
+db_name <- "test_stock_db2"
 db_path <- file.path(tempdir(), db_name)
 
 # create the database connection
@@ -55,6 +57,10 @@ is_valid_db_connection(db_con)
 # List tables in the database. For this example, we expect to see nothing as we have not populated it yet.
 tables <- DBI::dbListTables(db_con)
 tables
+
+# Clean all tables if any exist (for re-running the example)
+purrr::walk(tables, ~DBI::dbRemoveTable(db_con, .x))
+
 ```
 
 # Symbols data
@@ -123,14 +129,16 @@ symbols_to_get <- c("A8G.AX", "AAPL", "MSFT")
 start_date <- as.character(Sys.Date() - lubridate::days(200))
 interval <- "1d"
 ## Create the daily prices table in this new database
-update_stock_prices(
+update_data <- update_stock_prices(
 db_con,
 symbols_to_get,
 start_date,
 interval
 )
+
 ## Check the contents of the daily_prices table
 loaded_data <- DBI::dbGetQuery(db_con, "SELECT * FROM daily_prices")
+
 # 2 Updating the existing table with new data
 ## Fake the data to be old
 fake_old_date <- loaded_data %>% filter(open_time < as.character(Sys.Date() - 30))
@@ -140,7 +148,7 @@ DBI::dbWriteTable(db_con, "daily_prices", fake_old_date, overwrite = TRUE)
 symbols_before <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol")
 ## Now run the update function again to get the missing recent data
 symbols_to_get <- c("A8G.AX", "AAPL", "MSFT", "GOOGL")
-update_stock_prices(
+update_data <- update_stock_prices(
 db_con,
 symbols_to_get,
 start_date,
@@ -149,7 +157,9 @@ interval
 ## Check the table contents after updating
 symbols_after <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol")
 
-# compare before and after
+# Keep a list of errors encountered during the update
+update_errors <- update_data$errors %>% 
+  dplyr::mutate(frequency = interval)
 
 ```
 
@@ -160,32 +170,37 @@ symbols_to_get <- c("A8G.AX", "AAPL", "MSFT")
 start_date <- as.character(Sys.Date() - lubridate::days(7))
 interval <- "1h"
 
-load_stock_timeseries(symbols = "A8G.AX",
-   interval="1m",
-   start_date="2024-09-03",
-   end_date="2024-09-04")
-
-riingo::is_supported_ticker("CBA")
+riingo::is_supported_ticker("A8G")
 
 ## Create the daily prices table in this new database
-update_stock_prices(
+update_data <- update_stock_prices(
 db_con,
 symbols_to_get,
 start_date,
 interval
 )
+
 ## Check the contents of the hourly_prices table
 loaded_data <- DBI::dbGetQuery(db_con, "SELECT * FROM hourly_prices")
 # 2 Updating the existing table with new data
 ## Fake the data to be old
-fake_old_date <- loaded_data %>% filter(open_time < as.character(Sys.Date() - 4))
+fake_old_date <- loaded_data %>% filter(open_time < as.character(Sys.Date() - 3))
 ## write back the fake old data to the database
 DBI::dbWriteTable(db_con, "hourly_prices", fake_old_date, overwrite = TRUE)
+
+# update the errors table again
+update_errors_new <- update_data$errors %>% 
+  dplyr::mutate(frequency = interval)
+
+update_errors <- dplyr::bind_rows(update_errors, update_errors_new) %>% 
+  dplyr::distinct()
+
+
 ## Check the contents of the hourly_prices table
 symbols_before <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM hourly_prices GROUP BY symbol")
 ## Now run the update function again to get the missing recent data
 symbols_to_get <- c("A8G.AX", "AAPL", "MSFT", "GOOGL")
-update_stock_prices(
+update_data <- update_stock_prices(
 db_con,
 symbols_to_get,
 start_date,
@@ -194,7 +209,59 @@ interval
 ## Check the table contents after updating
 symbols_after <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM hourly_prices GROUP BY symbol")
 
+# update the errors table again
+update_errors_new <- update_data$errors %>% 
+  dplyr::mutate(frequency = interval)
 
+update_errors <- dplyr::bind_rows(update_errors, update_errors_new) %>% 
+  dplyr::distinct()
+
+
+
+```
+
+
+```{r update-dividends, results='asis'}
+# 
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT")
+start_date <- as.character(Sys.Date() - lubridate::days(600))
+
+## Create the daily prices table in this new database
+update_data <- update_dividends(
+db_con,
+symbols_to_get,
+start_date
+)
+
+## Check the contents of the dividends table
+loaded_data <- DBI::dbGetQuery(db_con, "SELECT * FROM dividends")
+
+# 2 Updating the existing table with new data
+## Fake the data to be old
+fake_old_date <- loaded_data %>% filter(date < as.character(Sys.Date() - 200))
+## write back the fake old data to the database
+DBI::dbWriteTable(db_con, "dividends", fake_old_date, overwrite = TRUE)
+## Check the contents of the daily_prices table
+symbols_before <- dbGetQuery(db_con,"SELECT symbol, MIN(date) as first_date, MAX(date) as last_date FROM dividends GROUP BY symbol")
+## Now run the update function again to get the missing recent data
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT", "GOOGL")
+update_data <- update_dividends(
+db_con,
+symbols_to_get,
+start_date
+)
+## Check the table contents after updating
+symbols_after <- dbGetQuery(db_con,"SELECT symbol, MIN(date) as first_date, MAX(date) as last_date FROM dividends GROUP BY symbol")
+
+# Keep a list of errors encountered during the update
+update_errors <- update_data$errors %>% 
+  dplyr::mutate(frequency = interval)
+
+
+```
+
+
+```{r close, include=FALSE}
 # disconnect when done
 DBI::dbDisconnect(db_con, shutdown = TRUE)
 
