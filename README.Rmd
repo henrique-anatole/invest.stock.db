@@ -260,6 +260,80 @@ update_errors <- update_data$errors %>%
 
 ```
 
+The last step, is to get the fundamental data. Different from the price and dividends data, the source for the fundamental data loads all data at once, not symbol by symbol. Therefore, the update function will get all data provided and then save only the data for the requested symbols to the database.
+
+Currently, the fundamental data source provides only US stock data.
+
+```{r update-fundamentals, results='asis'}
+# Here, the list of fundamental data is the main variable to define
+files_to_get = c(
+    "balance_sheet_equity",
+    "balance_sheet_assets"
+    # "balance_sheet_liabilities",
+    # "cash_flow_statement",
+    # "earnings_calendar",
+    # "eps_estimate",
+    # "eps_history",
+    # "income_statement",
+    # "rank_score",
+    # "sales_estimate"
+  )
+# get a very old date to get all available data
+start_date <- NULL
+
+## Create the daily prices table in this new database
+update_data <- update_fundamentals(
+  db_con,
+  files_to_get,
+  start_date
+)
+
+## Check the contents of the tables created
+for (dataset in files_to_get) {
+  table_name <- dataset
+  loaded_data <- DBI::dbGetQuery(db_con, paste0("SELECT * FROM ", table_name))
+  cat("Contents of table:", table_name, "\n")
+  print(dim(loaded_data))
+  cat("\n")
+}
+
+# 2 Updating the existing tables with new data
+for (dataset in files_to_get) {
+  table_name <- dataset
+  ## Fake the data to be old
+  # load the data
+  loaded_data <- DBI::dbGetQuery(db_con, paste0("SELECT * FROM ", table_name))
+  # filter to get only old data
+  fake_old_date <- loaded_data %>% filter(date < as.character(Sys.Date() - 200))
+  ## write back the fake old data to the database
+  DBI::dbWriteTable(db_con, table_name, fake_old_date, overwrite = TRUE)
+}
+## Check the contents of the tables before updating
+for (dataset in files_to_get) {
+  table_name <- dataset
+  symbols_before <- dbGetQuery(db_con,paste0("SELECT act_symbol, MIN(date) as first_date, MAX(date) as last_date FROM ", table_name, " GROUP BY act_symbol"))
+  cat("Before update - Contents of table:", table_name, "\n")
+  print(head(symbols_before))
+  cat("\n")
+}
+## Now run the update function again to get the missing recent data
+start_date <- as.character(Sys.Date() - lubridate::days(230))
+update_data <- update_fundamentals(
+  db_con,
+  files_to_get,
+  start_date
+)
+## Check the table contents after updating
+for (dataset in files_to_get) {
+  table_name <- dataset
+  symbols_after <- dbGetQuery(db_con,paste0("SELECT act_symbol, MIN(date) as first_date, MAX(date) as last_date FROM ", table_name, " GROUP BY act_symbol"))
+  cat("After update - Contents of table:", table_name, "\n")
+  print(head(symbols_after))
+  cat("\n")
+}
+
+
+```
 
 ```{r close, include=FALSE}
 # disconnect when done
