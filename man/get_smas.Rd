@@ -2,10 +2,20 @@
 % Please edit documentation in R/indicators_functions.R
 \name{get_smas}
 \alias{get_smas}
-\title{Get the Simple Moving Averages (SMA) for a given set of periods}
+\title{Get Simple Moving Averages from Database}
 \usage{
 get_smas(db_con, timeframe = "1d", periods = c(20, 50, 150, 200))
 }
+\arguments{
+\item{db_con}{A DBI connection object.}
+
+\item{timeframe}{Character. "1d" or "1h".}
+
+\item{periods}{Numeric vector of periods.}
+}
+\value{
+A data.frame with SMA columns.
+}
 \description{
-Get the Simple Moving Averages (SMA) for a given set of periods
+Get Simple Moving Averages from Database
 }

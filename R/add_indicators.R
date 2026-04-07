@@ -73,8 +73,9 @@ add_indicators <- function(
       check_recent_gaps(gap_size = 0.03, periods = c(5))
   }
   # min_max
-  if (any(grepl("min_max", indicators))) {
-    min_max <- get_min_max(db_con, timeframe = "1d", period = 120)
+  # grepl any mention of min_max or donchian in the indicators vector
+  if (any(grepl("min_max|donchian", indicators))) {
+    min_max <- get_donchian_channels(db_con, timeframe = "1d", period = 120)
     prepared_data <- prepared_data %>%
       left_join(min_max, by = c("symbol", "open_time"))
   }

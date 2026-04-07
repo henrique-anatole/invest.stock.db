@@ -1,72 +1,80 @@
-#' Get the Simple Moving Averages (SMA) for a given set of periods
-get_smas <- function(
-  db_con,
-  timeframe = "1d",
-  periods = c(20, 50, 150, 200)
-) {
-  # Ensure that the 'periods' parameter is valid
-  if (!is.numeric(periods) || length(periods) == 0 || any(periods <= 0)) {
+#' Get Simple Moving Averages from Database
+#' @param db_con A DBI connection object.
+#' @param timeframe Character. "1d" or "1h".
+#' @param periods Numeric vector of periods.
+#' @return A data.frame with SMA columns.
+#' @export
+get_smas <- function(db_con, timeframe = "1d", periods = c(20, 50, 150, 200)) {
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
+  if (!is.numeric(periods) || any(periods <= 0) || length(periods) == 0) {
     stop("'periods' must be a vector of positive integers.")
   }
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
-  # Ensure that the db_con object is valid
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    # "1w" = "weekly_prices",
-    # "1m" = "monthly_prices",
-    "1h" = "hourly_prices"
+
+  table_to_query <- table_map[timeframe]
+
+  # 2. Build SQL Columns
+  # Corrected vapply usage: character(1) instead of CHARACTER(1)
+  sma_cols <- vapply(
+    periods,
+    function(p) {
+      paste0(
+        "CASE WHEN ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY open_time) >= ",
+        p,
+        " THEN AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ",
+        " ROWS BETWEEN ",
+        (p - 1),
+        " PRECEDING AND CURRENT ROW) ",
+        " ELSE NULL END AS SMA_",
+        p
+      )
+    },
+    character(1)
   )
 
-  # Initialize the SELECT part of the query
-  select_query <- "SELECT symbol, open_time"
+  # 3. Construct and Execute Query
+  # Using paste(collapse) is cleaner than a for-loop
+  full_query <- paste0(
+    "SELECT symbol, open_time, ",
+    paste(sma_cols, collapse = ", "),
+    " FROM ",
+    table_to_query
+  )
 
-  # Loop over each period and add the corresponding AVG window function to the query
-  for (period in periods) {
-    # Dynamically generate the SQL for each period
-    select_query <- paste0(
-      select_query,
-      ", AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-      (period - 1),
-      " PRECEDING AND CURRENT ROW) AS SMA_",
-      period
-    )
-  }
-
-  # Add the FROM clause
-  select_query <- paste0(select_query, " FROM ", table_to_query)
-
-  # Execute the query and return the results as a data frame
-  result <- dbGetQuery(db_con, select_query)
-
-  # Exclude the first rows where there is insufficient data to calculate the averages
-  # result <- result %>%
-  #   group_by(symbol) %>%
-  #   filter(row_number() > max(periods)) %>%
-  #   ungroup()
+  result <- DBI::dbGetQuery(db_con, full_query)
 
   return(result)
 }
 
-# Function to calculate EMA for a single period
-calculate_single_ema <- function(data, period, column_name = "close") {
-  # Handle NA values in the specified column
-  data <- data %>%
-    mutate(!!column_name := na.locf(get(column_name), na.rm = FALSE)) # Carry forward last observation
+# Optimized for vector input
+calculate_single_ema <- function(x, period) {
+  # 1. Handle NAs (Carry forward)
+  x <- zoo::na.locf(x, na.rm = FALSE)
 
-  if (nrow(data) < period || all(is.na(data[[column_name]]))) {
-    # If there are insufficient rows or all values are NA, return NA for the EMA
-    return(rep(NA, nrow(data)))
-  } else {
-    # Calculate EMA using TTR::EMA
-    return(TTR::EMA(data[[column_name]], n = period))
+  # 2. Validation: Need enough non-NA values for the period
+  if (sum(!is.na(x)) < period) {
+    return(rep(as.numeric(NA), length(x)))
   }
+
+  # 3. Calculate
+  return(TTR::EMA(x, n = period))
 }
 
-#' Get the Exponential Moving Averages (EMA) for a given set of periods
+#' Calculate Multiple EMAs for a Timeseries
+#'
+#' @param timeseries A data frame containing 'symbol', 'close', and 'open_time'.
+#' @param periods A numeric vector of periods (e.g., 20, 50).
+#' @return A grouped_df (or ungrouped df if fixed) with new columns 'ema_P'.
+#' @export
 get_emas <- function(timeseries, periods = c(20, 50, 150, 200)) {
   # Check if the required columns exist
   if (!("symbol" %in% colnames(timeseries))) {
@@ -80,161 +88,152 @@ get_emas <- function(timeseries, periods = c(20, 50, 150, 200)) {
   }
 
   # Ensure 'periods' has at least one value
-  if (length(periods) == 0) {
-    stop("At least one period must be specified.")
+  if (!is.numeric(periods) || any(periods <= 0) || length(periods) == 0) {
+    stop("'periods' must be a vector of positive integers.")
   }
 
   # Sort data by 'open_time' before calculation
   timeseries <- timeseries %>%
-    arrange(symbol, open_time)
+    arrange(symbol, open_time) %>%
+    group_by(symbol)
 
   # Loop over all provided periods and calculate EMA for each
   for (period in periods) {
     # Create a new column name for the EMA
-    ema_col_name <- paste0("ema_", period)
+    ema_col_name <- paste0("EMA_", period)
 
     # Calculate EMA for the current period and add it to the dataframe
     timeseries <- timeseries %>%
-      group_by(symbol) %>%
-      mutate(!!ema_col_name := calculate_single_ema(cur_data(), period)) %>%
-      ungroup()
+      mutate(!!ema_col_name := calculate_single_ema(close, period))
   }
-
-  # Exclude the first rows where there is insufficient data to calculate the averages
-  # timeseries <- timeseries %>%
-  #   group_by(symbol) %>%
-  #   filter(row_number() > max(periods)) %>%
-  #   ungroup()
-  #
+  # Un-group the data frame after calculations
+  timeseries <- timeseries %>%
+    ungroup()
   # Return the timeseries with the new columns
   return(timeseries)
 }
-# daily_data = dbGetQuery(db_con, "SELECT * FROM daily_prices")
-# emas = get_emas(daily_data, c(20, 50, 150, 200))
 
-# Define the function to get Bollinger Bands with the dynamic timeframe
+#' Get Bollinger Bands and Distance Metrics from Database
+#'
+#' @description
+#' Generates a SQL query to calculate Bollinger Bands (SMA +/- 2SD) and the
+#' normalized distance of Close, High, and Low prices from those bands.
+#'
+#' @param db_con A valid DBI connection object.
+#' @param timeframe Character. Supported values: "1d", "1h".
+#' @param period Integer. The window size for the calculation (default 20).
+#'
+#' @return A data frame containing:
+#' \itemize{
+#'   \item \code{symbol}, \code{open_time}
+#'   \item \code{SMA_P}, \code{Upper_Band_P}, \code{Lower_Band_P}
+#'   \item \code{Distance_Upper_Band_P}: (Close - Upper) / 2SD
+#'   \item \code{Distance_Lower_Band_P}: (Close - Lower) / 2SD
+#'   \item \code{Distance_High_Upper_Band_P}: (High - Upper) / 2SD
+#'   \item \code{Distance_Low_Lower_Band_P}: (Low - Lower) / 2SD
+#' }
+#' @export
 get_bollinger_bands <- function(db_con, timeframe = "1d", period = 20) {
-  # Ensure that the 'period' is specified and valid
-  if (length(period) != 1) {
-    stop("Only one period is allowed.")
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
+    stop("'period' must be a single positive integer.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
+  table_to_query <- table_map[timeframe]
+
+  # Define the window once to avoid repetition/typos
+  win <- paste0(
+    "OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW)"
   )
 
-  # Initialize the SELECT part of the query
-  select_query <- "SELECT symbol, open_time"
-
-  # Calculate the SMA for the given period
+  # Building the query as a single coherent string
   select_query <- paste0(
-    select_query,
-    ", AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS SMA_",
-    period
-  )
-
-  # Calculate the Standard Deviation for the given period
-  select_query <- paste0(
-    select_query,
-    ", STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS STDDEV_",
-    period
-  )
-
-  # Calculate the Upper and Lower Bollinger Bands
-  select_query <- paste0(
-    select_query,
-    ", AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) + (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW)) AS Upper_Band_",
-    period
-  )
-
-  select_query <- paste0(
-    select_query,
-    ", AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) - (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW)) AS Lower_Band_",
-    period
-  )
-
-  # calculate the distance of the close price to the upper band
-  select_query <- paste0(
-    select_query,
-    ", (close - (AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) + (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW))) ) / (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW)) AS Distance_Upper_Band_",
-    period
-  )
-
-  # calculate the distance of the close price to the lower band
-  select_query <- paste0(
-    select_query,
-    ", (close - (AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) - (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW))) ) / (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW)) AS Distance_Lower_Band_",
-    period
-  )
-
-  # calculate the distance of the high price to the upper band
-  select_query <- paste0(
-    select_query,
-    ", (high - (AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) + (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW))) ) / (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW)) AS Distance_High_Upper_Band_",
-    period
-  )
-
-  # calculate the distance of the low price to the lower band
-  select_query <- paste0(
-    select_query,
-    ", (low - (AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) - (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW))) ) / (2 * STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW)) AS Distance_Low_Lower_Band_",
-    period
-  )
-
-  # Add the WHERE clause to avoid filtering out rows before SQL execution
-  select_query <- paste0(
-    select_query,
-    " FROM ",
+    "
+    SELECT 
+      symbol, 
+      open_time,
+      AVG(close) ",
+    win,
+    " AS SMA_",
+    period,
+    ",
+      STDDEV_POP(close) ",
+    win,
+    " AS STDDEV_",
+    period,
+    ",
+      -- Bands
+      (AVG(close) ",
+    win,
+    " + (2 * STDDEV_POP(close) ",
+    win,
+    ")) AS Upper_Band_",
+    period,
+    ",
+      (AVG(close) ",
+    win,
+    " - (2 * STDDEV_POP(close) ",
+    win,
+    ")) AS Lower_Band_",
+    period,
+    ",
+      -- Distances
+      (close - (AVG(close) ",
+    win,
+    " + (2 * STDDEV_POP(close) ",
+    win,
+    "))) / NULLIF(2 * STDDEV_POP(close) ",
+    win,
+    ", 0) AS Distance_Upper_Band_",
+    period,
+    ",
+      (close - (AVG(close) ",
+    win,
+    " - (2 * STDDEV_POP(close) ",
+    win,
+    "))) / NULLIF(2 * STDDEV_POP(close) ",
+    win,
+    ", 0) AS Distance_Lower_Band_",
+    period,
+    ",
+      (high - (AVG(close) ",
+    win,
+    " + (2 * STDDEV_POP(close) ",
+    win,
+    "))) / NULLIF(2 * STDDEV_POP(close) ",
+    win,
+    ", 0) AS Distance_High_Upper_Band_",
+    period,
+    ",
+      (low - (AVG(close) ",
+    win,
+    " - (2 * STDDEV_POP(close) ",
+    win,
+    "))) / NULLIF(2 * STDDEV_POP(close) ",
+    win,
+    ", 0) AS Distance_Low_Lower_Band_",
+    period,
+    "
+    FROM ",
     table_to_query,
-    " ORDER BY symbol, open_time"
+    "
+    ORDER BY symbol, open_time
+  "
   )
 
-  # Execute the query and return the results as a data frame
-  result <- dbGetQuery(db_con, select_query)
+  result <- DBI::dbGetQuery(db_con, select_query)
 
   # Exclude the first rows where there is insufficient data to calculate Bollinger Bands
   result <- result %>%
@@ -245,7 +244,17 @@ get_bollinger_bands <- function(db_con, timeframe = "1d", period = 20) {
   return(result)
 }
 
-# Define the MACD function using `get_ema`
+#' Calculate MACD, Signal Line, and Histogram
+#'
+#' @param timeseries Dataframe with symbol, open_time, and close.
+#' @param fast_period Integer. Fast EMA window (default 12).
+#' @param slow_period Integer. Slow EMA window (default 26).
+#' @param signal_period Integer. Signal line EMA window (default 9).
+#' @param maType Character. Moving average type (default "EMA").
+#' @param percent Logical. Use percentage difference instead of absolute (default TRUE).
+#' @return An ungrouped dataframe with 4 new columns: macd, signal_line, macd_histogram, macd_direction.
+#'
+#' @export
 get_macd <- function(
   timeseries,
   fast_period = 12,
@@ -254,1126 +263,995 @@ get_macd <- function(
   maType = "EMA",
   percent = TRUE
 ) {
-  # Ensure the timeseries has necessary columns
-  if (!"symbol" %in% colnames(timeseries)) {
-    stop("The timeseries must have a 'symbol' column.")
+  # 1. Validations
+  required_cols <- c("symbol", "open_time", "close")
+  if (!all(required_cols %in% colnames(timeseries))) {
+    stop(
+      "Missing required columns: ",
+      paste(setdiff(required_cols, colnames(timeseries)), collapse = ", ")
+    )
   }
-  if (!"open_time" %in% colnames(timeseries)) {
-    stop("The timeseries must have an 'open_time' column.")
-  }
 
-  # Check for the quantity of rows of each symbol in the timeseries
-  symbol_counts <- timeseries %>%
-    group_by(symbol) %>%
-    summarise(n = n()) %>%
-    ungroup()
-
-  # Filter the symbols with less rows than the slow_period
-  symbols_to_filter <- symbol_counts %>%
-    filter(n < slow_period) %>%
-    pull(symbol)
-
-  # Calculate the Signal line (9-period EMA of the MACD)
+  # 2. Processing
   timeseries <- timeseries %>%
+    arrange(symbol, open_time) %>%
     group_by(symbol) %>%
-    na.locf() %>%
-    # filter out any symbol in the list of symbols to filter
-    filter(!symbol %in% symbols_to_filter) %>%
+    # Ensure sufficient data exists to avoid TTR errors
+    filter(n() >= (slow_period + signal_period)) %>%
     mutate(
-      macd = MACD(
-        close,
+      # Fill NAs in price only
+      clean_close = zoo::na.locf(close, na.rm = FALSE),
+      # Calculate MACD once as a matrix
+      macd_mat = TTR::MACD(
+        clean_close,
         nFast = fast_period,
         nSlow = slow_period,
         nSig = signal_period,
         maType = maType,
         percent = percent
-      )[, 1],
-      signal_line = MACD(
-        close,
-        nFast = fast_period,
-        nSlow = slow_period,
-        nSig = signal_period,
-        maType = maType,
-        percent = percent
-      )[, 2],
+      ),
+      macd = macd_mat[, 1],
+      signal_line = macd_mat[, 2],
       macd_histogram = macd - signal_line,
-      macd_direction = ifelse(macd_histogram > 0, 1, 0)
+      macd_direction = if_else(macd_histogram > 0, 1, 0)
     ) %>%
+    select(-macd_mat, -clean_close) %>% # Clean up temp columns
     ungroup() %>%
     filter(!is.na(signal_line))
 
-  # Return the updated timeseries with MACD and Signal Line
   return(timeseries)
 }
 
-# Get the main indicators related to volatility
+#' Get Volatility Indicators from Database
+#'
+#' @description
+#' Calculates Intraday Volatility, True Range, Price Gaps, Standard Deviation,
+#' and ATR (Average True Range) using SQL window functions.
+#'
+#' @param db_con A DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param periods Numeric vector of periods for Volatility and ATR.
+#' @return A data frame with volatility metrics for each specified period.
+#' @export
 get_volatilities <- function(
   db_con,
   timeframe = "1d",
   periods = c(10, 20, 50)
 ) {
-  # Ensure that the 'periods' are valid
-  if (!is.numeric(periods) || length(periods) == 0 || any(periods <= 0)) {
+  # ... [Validations] ...
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
+  if (!is.numeric(periods) || any(periods <= 0) || length(periods) == 0) {
     stop("'periods' must be a vector of positive integers.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_to_query <- table_map[timeframe]
 
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_data AS (
-        SELECT
-            symbol,
-            open_time,
-            open,
-            high,
-            low,
-            close,
-            -- Calculate intraday volatility (high - low)
-            high - low AS intraday_volatility,
-            -- Calculate true range
+  # 2. Row-level metrics in CTE
+  cte_query <- paste0(
+    "
+    WITH price_data AS (
+        SELECT symbol, open_time, open, high, low, close,
+            (high - low) AS intraday_volatility,
             GREATEST(
                 high - low,
                 ABS(high - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)),
                 ABS(low - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time))
             ) AS true_range,
-            -- Calculate gap down
             CASE WHEN open < LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)
-                 THEN (open - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)) / LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)
+                 THEN (open - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)) / NULLIF(LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time), 0)
                  ELSE NULL END AS gap_down,
-            -- Calculate gap up
             CASE WHEN open > LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)
-                 THEN (open - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)) / LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)
+                 THEN (open - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)) / NULLIF(LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time), 0)
                  ELSE NULL END AS gap_up
         FROM ",
     table_to_query,
     "
-    )
-    SELECT
-        symbol,
-        open_time,
-        intraday_volatility,
-        true_range,
-        gap_down,
-        gap_up"
+    )"
   )
 
-  # Add volatility and ATR calculations for each period
-  for (period in periods) {
-    select_query <- paste0(
-      select_query,
-      ", STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-      (period - 1),
-      " PRECEDING AND CURRENT ROW) AS volatility_",
-      period,
-      ", AVG(true_range) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-      (period - 1),
-      " PRECEDING AND CURRENT ROW) AS atr_",
-      period
-    )
-  }
+  # 3. Dynamic Window Metrics
+  window_cols <- vapply(
+    periods,
+    function(p) {
+      paste0(
+        ", STDDEV_POP(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+        p - 1,
+        " PRECEDING AND CURRENT ROW) AS volatility_",
+        p,
+        ", AVG(true_range) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+        p - 1,
+        " PRECEDING AND CURRENT ROW) AS atr_",
+        p
+      )
+    },
+    character(1)
+  )
 
-  # Add the FROM clause
-  select_query <- paste0(select_query, " FROM price_data")
+  full_query <- paste0(
+    cte_query,
+    " SELECT symbol, open_time, intraday_volatility, true_range, gap_down, gap_up",
+    paste(window_cols, collapse = ""),
+    " FROM price_data ORDER BY symbol, open_time"
+  )
 
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
+  result <- DBI::dbGetQuery(db_con, full_query) %>%
+    group_by(symbol) %>%
+    filter(row_number() >= min(periods)) %>% # Exclude warm-up rows
+    ungroup()
 
-  # Return the result
   return(result)
 }
 
-# Check for recent gaps in most recent periods
-check_recent_gaps <- function(timeseries, gap_size = 0.03, periods = c(5)) {
-  # Check if the timeseries has the necessary columns (gap_up or gap_down)
-  if (!("gap_up" %in% colnames(timeseries))) {
-    stop(
-      "The timeseries must have a 'gap_up' and a 'gap_down' column. Run get_volatilies(db_con) to get these columns."
-    )
+#' Check for Recent Significant Price Gaps
+#'
+#' @description
+#' Scans a timeseries for gaps exceeding a percentage threshold within a
+#' rolling lookback window.
+#'
+#' @param timeseries Dataframe containing 'gap_up' and 'gap_down'.
+#' @param gap_size Numeric. The threshold (e.g., 0.03 for 3%).
+#' @param periods Integer. The lookback window size (default 5).
+#' @return The original dataframe with 'significant_gap' and 'recent_periods_gap' columns.
+#' @export
+check_recent_gaps <- function(timeseries, gap_size = 0.03, periods = 5) {
+  if (!all(c("gap_up", "gap_down") %in% colnames(timeseries))) {
+    stop("The timeseries must have 'gap_up' and 'gap_down' columns.")
   }
-
-  # Creates the new column, checking if any of the gap_up or gap_down columns are bigger than the gap_size in the previous periods
 
   timeseries <- timeseries %>%
     group_by(symbol) %>%
     mutate(
-      significant_gap = coalesce(gap_up, abs(gap_down), 0) > gap_size,
-      # Check for significant gaps in the most recent `periods` rows
-      recent_periods_gap = slider::slide_lgl(
-        significant_gap,
-        .f = ~ any(.x, na.rm = TRUE),
-        .before = periods - 1, # Look back `periods - 1` rows (including the current row)
-        .complete = TRUE # Only evaluate when there are enough rows in the window
+      # Magnitude of the gap regardless of direction
+      significant_gap = coalesce(gap_up, abs(gap_down), 0) > gap_size
+    )
+
+  # Support multiple lookback periods if provided
+  for (p in periods) {
+    col_name <- paste0("recent_gap_", p)
+    timeseries <- timeseries %>%
+      mutate(
+        !!col_name := slider::slide_lgl(
+          significant_gap,
+          .f = ~ any(.x, na.rm = TRUE),
+          .before = p - 1,
+          .complete = TRUE
+        )
       )
-    ) %>%
-    ungroup()
-
-  return(timeseries)
-}
-
-# Get the Min and Max values for a given period
-get_min_max <- function(db_con, timeframe = "1d", period = 52) {
-  # Ensure that the 'period' is specified and valid
-  if (length(period) != 1) {
-    stop("Only one period is allowed.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  return(ungroup(timeseries))
+}
+
+
+#' Get Donchian Channels (Rolling Min/Max) from Database
+#' @description Calculates the rolling High and Low bounds and the Mid-point.
+#' @param db_con A DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param period Integer. Lookback window (default 52).
+#' @return A data frame with upper_donchian_P, lower_donchian_P, and mid_donchian_P.
+#' @export
+get_donchian_channels <- function(db_con, timeframe = "1d", period = 52) {
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
+  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
+    stop("'period' must be a single positive integer.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_to_query <- table_map[timeframe]
 
-  # Initialize the SELECT part of the query
+  # Construct the SQL Query
+  # Note: Using MAX(high) and MIN(low) as suggested for standard channels
   select_query <- paste0(
-    "SELECT symbol, open_time, ",
-    "MIN(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    "
+    SELECT 
+        symbol, 
+        open_time, 
+        MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
     period - 1,
-    " PRECEDING AND CURRENT ROW) AS min_",
+    " PRECEDING AND CURRENT ROW) AS upper_donchian_",
     period,
-    ",",
-    "MAX(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    ",
+        MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
     period - 1,
-    " PRECEDING AND CURRENT ROW) AS max_",
+    " PRECEDING AND CURRENT ROW) AS lower_donchian_",
     period,
-    ",",
-    "FROM ",
+    "
+    FROM ",
     table_to_query
   )
 
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
+  # Execute the query and return the results as a data frame
+  result <- DBI::dbGetQuery(db_con, select_query)
 
-  # Return the result
+  # Calculate the Mid-Channel point and filter warm-up rows
+  result <- result %>%
+    dplyr::group_by(symbol) %>%
+    dplyr::mutate(
+      !!paste0("mid_donchian_", period) := (get(paste0(
+        "upper_donchian_",
+        period
+      )) +
+        get(paste0("lower_donchian_", period))) /
+        2
+    ) %>%
+    # Exclude rows where there is insufficient data for a full window
+    dplyr::filter(dplyr::row_number() >= period) %>%
+    dplyr::ungroup()
+
   return(result)
 }
 
-# Get the Pivot Points for a given period
-get_pivots <- function(db_con, weekly = TRUE, fib = FALSE, round = FALSE) {
-  weekly_fib_query <- "WITH weekly_data AS (
-                  -- Aggregate daily data into weekly data, considering the year
-                  SELECT
-                  symbol,
-                  DATE_TRUNC('week', open_time) AS week_start,
-                  EXTRACT(YEAR FROM open_time) AS year,  -- Extract the year
-                  MAX(high) AS weekly_high,
-                  MIN(low) AS weekly_low,
-                  ANY_VALUE(close) AS weekly_close  -- Use ANY_VALUE to get a single close value
-                  FROM
-                  daily_prices
-                  GROUP BY
-                  symbol,
-                  DATE_TRUNC('week', open_time),
-                  EXTRACT(YEAR FROM open_time)  -- Group by year
-                ),
-                weekly_pivots AS (
-                  -- Calculate Fibonacci pivots on weekly data, considering the year
-                  SELECT
-                  symbol,
-                  week_start,
-                  year,
-                  weekly_high,
-                  weekly_low,
-                  weekly_close,
-                  -- Calculate the pivot point
-                  (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) +
-                      LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) +
-                      LAG(weekly_close, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) / 3 AS pivt,
-                  -- Calculate Fibonacci resistance levels (R1, R2, R3)
-                  pivt + (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                            LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) * 0.382 AS r1,
-                  pivt + (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                            LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) * 0.618 AS r2,
-                  pivt + (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                            LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) * 1.000 AS r3,
-                  -- Calculate Fibonacci support levels (S1, S2, S3)
-                  pivt - (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                            LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) * 0.382 AS s1,
-                  pivt - (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                            LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) * 0.618 AS s2,
-                  pivt - (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                            LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) * 1.000 AS s3,
-                  -- Swing high (previous week's high)
-                      LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) AS swing_high
-                  FROM
-                      weekly_data
-              )
-              -- Join weekly pivots back to daily data
-              SELECT
-                  d.symbol,
-                  d.open_time,
-                  d.high AS daily_high,
-                  d.low AS daily_low,
-                  d.close AS daily_close,
-                  w.pivt,
-                  w.r1,
-                  w.r2,
-                  w.r3,
-                  w.s1,
-                  w.s2,
-                  w.s3,
-                  w.swing_high
-              FROM
-                  daily_prices d
-              LEFT JOIN
-                  weekly_pivots w
-              ON
-                  d.symbol = w.symbol
-                  AND DATE_TRUNC('week', d.open_time) = w.week_start
-                  AND EXTRACT(YEAR FROM d.open_time) = w.year  -- Join on year
-              ORDER BY
-                  d.symbol,
-                  d.open_time;"
+#' Get Daily or Weekly Pivot Points
+#' @description
+#' Calculates Floor (Regular) or Fibonacci Pivot Points. When 'weekly' is TRUE,
+#' it aggregates daily data into weeks, calculates the levels, and joins them
+#' back to every daily row for that week.
+#' @param db_con A DBI connection object (e.g., DuckDB, Postgres).
+#' @param weekly Logical. If TRUE, calculates pivots based on previous week's data.
+#' @param fib Logical. If TRUE, uses Fibonacci ratios. If FALSE, uses Floor formulas.
+#' @return A data frame with daily price data and corresponding pivot levels.
+#' @export
+get_pivots <- function(db_con, weekly = TRUE, fib = FALSE) {
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
 
-  weekly_reg_query <- "WITH weekly_data AS (
-              -- Aggregate daily data into weekly data, considering the year
-              SELECT
-                  symbol,
-                  DATE_TRUNC('week', open_time) AS week_start,
-                  EXTRACT(YEAR FROM open_time) AS year,  -- Extract the year
-                  MAX(high) AS weekly_high,
-                  MIN(low) AS weekly_low,
-                  ANY_VALUE(close) AS weekly_close  -- Use ANY_VALUE to get a single close value
-              FROM
-                  daily_prices
-              GROUP BY
-                  symbol,
-                  DATE_TRUNC('week', open_time),
-                  EXTRACT(YEAR FROM open_time)  -- Group by year
-          ),
-          weekly_pivots AS (
-              -- Calculate regular pivots on weekly data, considering the year
-              SELECT
-                  symbol,
-                  week_start,
-                  year,
-                  weekly_high,
-                  weekly_low,
-                  weekly_close,
-                  -- Calculate the pivot point
-                  (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) +
-                   LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) +
-                   LAG(weekly_close, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) / 3 AS pivt,
-                  -- Calculate resistance levels (R1, R2, R3)
-                  (2 * pivt) - LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) AS r1,
-                  pivt + (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                          LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) AS r2,
-                  LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) +
-                  2 * (pivt - LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) AS r3,
-                  -- Calculate support levels (S1, S2, S3)
-                  (2 * pivt) - LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) AS s1,
-                  pivt - (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                          LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start)) AS s2,
-                  LAG(weekly_low, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) -
-                  2 * (LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) - pivt) AS s3,
-                  -- Swing high (previous week's high)
-                  LAG(weekly_high, 1) OVER (PARTITION BY symbol, year ORDER BY week_start) AS swing_high
-              FROM
-                  weekly_data
-          )
-          -- Join weekly pivots back to daily data
-          SELECT
-              d.symbol,
-              d.open_time,
-              d.high AS daily_high,
-              d.low AS daily_low,
-              d.close AS daily_close,
-              w.pivt,
-              w.r1,
-              w.r2,
-              w.r3,
-              w.s1,
-              w.s2,
-              w.s3,
-              w.swing_high
-          FROM
-              daily_prices d
-          LEFT JOIN
-              weekly_pivots w
-          ON
-              d.symbol = w.symbol
-              AND DATE_TRUNC('week', d.open_time) = w.week_start
-              AND EXTRACT(YEAR FROM d.open_time) = w.year  -- Join on year
-          ORDER BY
-              d.symbol,
-              d.open_time;"
+  # 2. Define the Mathematical Formulas
+  # prev_h, prev_l, and prev_c are aliases defined in the CTEs below
+  if (fib) {
+    # Fibonacci Levels: Pivot +/- Range * Ratios
+    math_levels <- "
+      pivt + (prev_h - prev_l) * 0.382 AS r1, 
+      pivt + (prev_h - prev_l) * 0.618 AS r2, 
+      pivt + (prev_h - prev_l) * 1.000 AS r3,
+      pivt - (prev_h - prev_l) * 0.382 AS s1, 
+      pivt - (prev_h - prev_l) * 0.618 AS s2, 
+      pivt - (prev_h - prev_l) * 1.000 AS s3"
+  } else {
+    # Standard Floor Levels
+    math_levels <- "
+      (2 * pivt) - prev_l AS r1, 
+      pivt + (prev_h - prev_l) AS r2, 
+      prev_h + 2 * (pivt - prev_l) AS r3,
+      (2 * pivt) - prev_h AS s1, 
+      pivt - (prev_h - prev_l) AS s2, 
+      prev_l - 2 * (prev_h - pivt) AS s3"
+  }
 
-  daily_fib_query <- "WITH pivot_data AS (
-                      SELECT
-                          symbol,
-                          open_time,
-                          high,
-                          low,
-                          close,
-                          -- Calculate the pivot point
-                          (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) +
-                           LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time) +
-                           LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)) / 3 AS pivt,
-                          -- Calculate Fibonacci resistance levels (R1, R2, R3)
-                          pivt + (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                                  LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) * 0.382 AS r1,
-                          pivt + (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                                  LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) * 0.618 AS r2,
-                          pivt + (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                                  LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) * 1.000 AS r3,
-                          -- Calculate Fibonacci support levels (S1, S2, S3)
-                          pivt - (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                                  LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) * 0.382 AS s1,
-                          pivt - (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                                  LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) * 0.618 AS s2,
-                          pivt - (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                                  LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) * 1.000 AS s3,
-                          -- Swing high (previous day's high)
-                          LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS swing_high
-                      FROM
-                          daily_prices
-                   )
-                  SELECT
-                      symbol,
-                      open_time,
-                      pivt,
-                      r1,
-                      r2,
-                      r3,
-                      s1,
-                      s2,
-                      s3,
-                      swing_high
-                      FROM
-                          pivot_data
-                      WHERE
-                          pivt IS NOT NULL  -- Exclude rows where pivot cannot be calculated (e.g., first row)
-                      ORDER BY
-                          symbol,
-                          open_time;"
-
-  daily_reg_query <- "WITH pivot_data AS (
-                      SELECT
-                          symbol,
-                          open_time,
-                          high,
-                          low,
-                          close,
-                          -- Calculate the pivot point
-                          (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) +
-                           LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time) +
-                           LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)) / 3 AS pivt,
-                          -- Calculate resistance levels (R1, R2, R3)
-                          (2 * pivt) - LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS r1,
-                          pivt + (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                                  LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) AS r2,
-                          LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) +
-                          2 * (pivt - LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) AS r3,
-                          -- Calculate support levels (S1, S2, S3)
-                          (2 * pivt) - LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS s1,
-                          pivt - (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                                  LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time)) AS s2,
-                          LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time) -
-                          2 * (LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) - pivt) AS s3,
-                          -- Swing high (previous day's high)
-                          LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS swing_high
-                      FROM
-                          daily_prices
-                      )
-                      SELECT
-                          symbol,
-                          open_time,
-                          pivt,
-                          r1,
-                          r2,
-                          r3,
-                          s1,
-                          s2,
-                          s3,
-                          swing_high
-                      FROM
-                          pivot_data
-                      WHERE
-                          pivt IS NOT NULL  -- Exclude rows where pivot cannot be calculated (e.g., first row)
-                      ORDER BY
-                          symbol,
-                          open_time;"
-
-  query <- case_when(
-    weekly == TRUE & fib == TRUE ~ weekly_fib_query,
-    weekly == TRUE & fib == FALSE ~ weekly_reg_query,
-    weekly == FALSE & fib == TRUE ~ daily_fib_query,
-    weekly == FALSE & fib == FALSE ~ daily_reg_query
-  )
-
-  # Execute the query
+  # 3. Select the Query Path
+  if (weekly) {
+    # WEEKLY LOGIC: Aggregate -> Calculate -> Join back to Daily
+    query <- paste0(
+      "
+      WITH weekly_agg AS (
+        SELECT 
+          symbol, 
+          DATE_TRUNC('week', open_time) AS week_start,
+          MAX(high) AS w_high, 
+          MIN(low) AS w_low, 
+          LAST(close ORDER BY open_time) AS w_close
+        FROM daily_prices
+        GROUP BY 1, 2
+      ),
+      weekly_pivots AS (
+        SELECT 
+          symbol, 
+          week_start,
+          LAG(w_high) OVER (PARTITION BY symbol ORDER BY week_start) AS prev_h,
+          LAG(w_low) OVER (PARTITION BY symbol ORDER BY week_start) AS prev_l,
+          LAG(w_close) OVER (PARTITION BY symbol ORDER BY week_start) AS prev_c
+        FROM weekly_agg
+      )
+      SELECT 
+        d.symbol, d.open_time, d.high, d.low, d.close,
+        (prev_h + prev_l + prev_c) / 3 AS pivt,
+        prev_h AS swing_high,
+        ",
+      math_levels,
+      "
+      FROM daily_prices d
+      LEFT JOIN weekly_pivots w 
+        ON d.symbol = w.symbol 
+        AND DATE_TRUNC('week', d.open_time) = w.week_start
+      WHERE pivt IS NOT NULL
+      ORDER BY d.symbol, d.open_time
+    "
+    )
+  } else {
+    # DAILY LOGIC: Calculate using simple LAGs
+    query <- paste0(
+      "
+      WITH daily_pivots AS (
+        SELECT 
+          symbol, open_time, high, low, close,
+          LAG(high) OVER (PARTITION BY symbol ORDER BY open_time) AS prev_h,
+          LAG(low) OVER (PARTITION BY symbol ORDER BY open_time) AS prev_l,
+          LAG(close) OVER (PARTITION BY symbol ORDER BY open_time) AS prev_c
+        FROM daily_prices
+      )
+      SELECT 
+        symbol, open_time, high, low, close,
+        (prev_h + prev_l + prev_c) / 3 AS pivt,
+        prev_h AS swing_high,
+        ",
+      math_levels,
+      "
+      FROM daily_pivots
+      WHERE pivt IS NOT NULL
+      ORDER BY symbol, open_time
+    "
+    )
+  }
+  # 4. Execute the query and return the results as a data frame
   result <- DBI::dbGetQuery(db_con, query)
 
-  # Return the result
   return(result)
 }
 
-# Get the RSI and Stochastic Oscillator for a given period
+#' Get RSI and Stochastic Oscillator
+#'
+#' @description
+#' Calculates the Relative Strength Index (RSI) and the Stochastic Oscillator (%K)
+#' using SQL window functions at the database level.
+#' The code calculates a "Simple" RSI. If you wanted the official Wilder’s RSI, you would need a recursive EMA, which is significantly harder to write in standard SQL (often requiring a recursive CTE). For most strategies, the SMA version is a perfectly valid proxy.
+#' @param db_con A valid DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param period Integer. The lookback period for both indicators (default 14).
+#'
+#' @return A data frame containing symbol, open_time, rsi, and stochastic_k.
+#' @export
 get_oscillators <- function(db_con, timeframe = "1d", period = 14) {
-  # Ensure that the 'period' is specified and valid
-  if (length(period) != 1) {
-    stop("Only one period is allowed.")
+  # Validations
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
+    stop("'period' must be a single positive integer.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_to_query <- table_map[timeframe]
 
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_changes AS (
-        SELECT
-            symbol,
-            open_time,
-            close,
-            -- Calculate price change from the previous period
-            close - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS price_change
-        FROM
-            ",
-    table_to_query,
+  # Consolidated Query: One path for RSI and Stochastics
+  query <- paste0(
     "
-    ),
-    gains_losses AS (
+    WITH raw_stats AS (
         SELECT
             symbol,
             open_time,
             close,
-            -- Separate gains and losses
-            CASE WHEN price_change > 0 THEN price_change ELSE 0 END AS gain,
-            CASE WHEN price_change < 0 THEN ABS(price_change) ELSE 0 END AS loss
-        FROM
-            price_changes
-    ),
-    avg_gains_losses AS (
-        SELECT
-            symbol,
-            open_time,
-            close,
-            -- Calculate average gains and losses over the specified period
-            AVG(gain) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    period - 1,
-    " PRECEDING AND CURRENT ROW) AS avg_gain,
-            AVG(loss) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    period - 1,
-    " PRECEDING AND CURRENT ROW) AS avg_loss
-        FROM
-            gains_losses
-    ),
-    rsi_data AS (
-        SELECT
-            symbol,
-            open_time,
-            close,
-            -- Calculate RSI
-            100 - (100 / (1 + (avg_gain / NULLIF(avg_loss, 0)))) AS rsi
-        FROM
-            avg_gains_losses
-    ),
-    high_low AS (
-        SELECT
-            symbol,
-            open_time,
-            close,
-            high,
-            low,
-            -- Calculate highest high and lowest low over the specified period
+            -- For Stochastics
             MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
     period - 1,
-    " PRECEDING AND CURRENT ROW) AS highest_high,
+    " PRECEDING AND CURRENT ROW) AS hi,
             MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
     period - 1,
-    " PRECEDING AND CURRENT ROW) AS lowest_low
-        FROM
-            ",
-    table_to_query,
-    "
-    ),
-    stoch_data AS (
-        SELECT
-            symbol,
-            open_time,
-            close,
-            -- Calculate Stochastic %K
-            (close - lowest_low) / NULLIF((highest_high - lowest_low), 0) * 100 AS stochastic_k
-        FROM
-            high_low
-    )
-    SELECT
-        r.symbol,
-        r.open_time,
-        r.rsi,
-        s.stochastic_k
-    FROM
-        rsi_data r
-    JOIN
-        stoch_data s
-    ON
-        r.symbol = s.symbol
-        AND r.open_time = s.open_time
-    ORDER BY
-        r.symbol,
-        r.open_time;"
-  )
-
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
-
-  # Return the result
-  return(result)
-}
-
-# Get various trend-following indicators
-get_trend_followers <- function(db_con, timeframe = "1d", period = 14) {
-  # Ensure that the 'period' is specified and valid
-  if (length(period) != 1 || !is.numeric(period) || period <= 0) {
-    stop("'period' must be a positive integer.")
-  }
-
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
-    stop("Invalid timeframe. Supported values are '1d', '1h'.")
-  }
-
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
-
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_data AS (
-        SELECT
-            symbol,
-            open_time,
-            close,
-            -- Calculate Momentum (current close - close 'period' periods ago)
-            close - LAG(close, ",
-    period,
-    ") OVER (PARTITION BY symbol ORDER BY open_time) AS momentum,
-            -- Calculate ROC (Rate of Change)
-            (close - LAG(close, ",
-    period,
-    ") OVER (PARTITION BY symbol ORDER BY open_time)) / 
-            LAG(close, ",
-    period,
-    ") OVER (PARTITION BY symbol ORDER BY open_time) * 100 AS roc,
-            -- Calculate KER (Kaufman Efficiency Ratio)
-            ABS(close - LAG(close, ",
-    period,
-    ") OVER (PARTITION BY symbol ORDER BY open_time)) AS net_price_change,
-            ABS(close - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)) AS abs_price_change
+    " PRECEDING AND CURRENT ROW) AS lo,
+            -- For RSI
+            close - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS diff
         FROM ",
     table_to_query,
     "
+    ),
+    rsi_calc AS (
+        SELECT
+            *,
+            CASE WHEN diff > 0 THEN diff ELSE 0 END AS gain,
+            CASE WHEN diff < 0 THEN ABS(diff) ELSE 0 END AS loss
+        FROM raw_stats
+    ),
+    final_indicators AS (
+        SELECT
+            symbol,
+            open_time,
+            -- RSI Calculation
+            100 - (100 / (1 + (
+                AVG(gain) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW) / 
+                NULLIF(AVG(loss) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW), 0)
+            ))) AS rsi,
+            -- Stochastic %K Calculation
+            (close - lo) / NULLIF(hi - lo, 0) * 100 AS stochastic_k
+        FROM rsi_calc
+    )
+    SELECT * FROM final_indicators 
+    ORDER BY symbol, open_time
+  "
+  )
+  result <- DBI::dbGetQuery(db_con, query) %>%
+    group_by(symbol) %>%
+    filter(row_number() >= period) %>% # Exclude warm-up rows
+    ungroup()
+
+  return(result)
+}
+
+
+#' Get Trend Following Indicators
+#'
+#' @description
+#' Calculates Momentum, Rate of Change (ROC), and Kaufman's Efficiency Ratio (KER)
+#' using SQL window functions. Useful for identifying trend strength and noise.
+#'
+#' @param db_con A valid DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param period Integer. The lookback window for trend calculations (default 14).
+#'
+#' @return A data frame containing symbol, open_time, momentum, roc, and ker.
+#' @export
+get_trend_followers <- function(db_con, timeframe = "1d", period = 14) {
+  # Validations
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
+  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
+    stop("'period' must be a single positive integer.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
+    stop("Invalid timeframe. Supported values are '1d', '1h'.")
+  }
+
+  table_to_query <- table_map[timeframe]
+
+  # SQL Query
+  # We use a single CTE to get the lagged prices and daily absolute changes
+  query <- paste0(
+    "
+    WITH base_data AS (
+        SELECT
+            symbol,
+            open_time,
+            close,
+            LAG(close, ",
+    period,
+    ") OVER (PARTITION BY symbol ORDER BY open_time) AS prev_close,
+            ABS(close - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)) AS daily_abs_diff
+        FROM ",
+    table_to_query,
+    "
+    ),
+    metrics AS (
+        SELECT
+            symbol,
+            open_time,
+            (close - prev_close) AS momentum,
+            ((close - prev_close) / NULLIF(prev_close, 0)) * 100 AS roc,
+            ABS(close - prev_close) AS net_change,
+            SUM(daily_abs_diff) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW) AS total_path
+        FROM base_data
     )
     SELECT
         symbol,
         open_time,
         momentum,
         roc,
-        net_price_change / NULLIF(SUM(abs_price_change) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    period,
-    " PRECEDING AND CURRENT ROW), 0) AS ker
-    FROM
-        price_data
-    WHERE
-        momentum IS NOT NULL  -- Exclude rows where momentum cannot be calculated
-    ORDER BY
-        symbol,
-        open_time;"
+        net_change / NULLIF(total_path, 0) AS ker
+    FROM metrics
+    ORDER BY symbol, open_time
+  "
   )
 
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
+  result <- DBI::dbGetQuery(db_con, query) %>%
+    group_by(symbol) %>%
+    filter(row_number() >= period) %>% # Exclude warm-up rows
+    ungroup()
 
-  # Return the result
   return(result)
 }
 
-# Get the Volume Oscillators
+#' Get Volume Oscillators (RSI Volume & Force Index)
+#'
+#' @description
+#' Calculates volume-weighted indicators to confirm trend strength.
+#' RSI Volume identifies volume momentum, while the Force Index combines
+#' price change and volume to measure market power.
+#'
+#' @param db_con A valid DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param rsi_period Integer. Lookback for Volume RSI (default 14).
+#' @param force_index_smoothing Integer. SMA window for Force Index (default 13).
+#'
+#' @return A data frame containing symbol, open_time, rsi_volume, and force_index.
+#' @export
 get_vol_oscillators <- function(
   db_con,
   timeframe = "1d",
   rsi_period = 14,
   force_index_smoothing = 13
 ) {
-  # Ensure that the 'rsi_period' and 'force_index_smoothing' are valid
-  if (!is.numeric(rsi_period) || rsi_period <= 0 || length(rsi_period) != 1) {
-    stop("'rsi_period' must be a positive integer.")
-  }
-  if (
-    !is.numeric(force_index_smoothing) ||
-      force_index_smoothing <= 0 ||
-      length(force_index_smoothing) != 1
-  ) {
-    stop("'force_index_smoothing' must be a positive integer.")
+  # Validations
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_to_query <- table_map[timeframe]
 
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_data AS (
+  if (length(rsi_period) != 1 || rsi_period <= 0) {
+    stop("rsi_period must be a positive integer.")
+  }
+  if (length(force_index_smoothing) != 1 || force_index_smoothing <= 0) {
+    stop("force_index_smoothing must be a positive integer.")
+  }
+
+  # Consolidated SQL Query
+  query <- paste0(
+    "
+    WITH base_stats AS (
         SELECT
             symbol,
             open_time,
             close,
             volume,
-            -- Calculate daily price change
-            close - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS price_change,
-            -- Calculate volume change for RSI_Volume
-            volume - LAG(volume, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS volume_change
+            -- Price change for Force Index
+            close - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS price_diff,
+            -- Volume change for Volume RSI
+            volume - LAG(volume, 1) OVER (PARTITION BY symbol ORDER BY open_time) AS vol_diff
         FROM ",
     table_to_query,
     "
     ),
-    rsi_data AS (
+    gain_loss_calc AS (
         SELECT
-            symbol,
-            open_time,
-            close,
-            volume,
-            price_change,
-            volume_change,
-            -- Calculate average gain and loss for RSI_Volume
-            CASE WHEN volume_change > 0 THEN volume_change ELSE 0 END AS volume_gain,
-            CASE WHEN volume_change < 0 THEN ABS(volume_change) ELSE 0 END AS volume_loss,
-            AVG(CASE WHEN volume_change > 0 THEN volume_change ELSE 0 END) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    rsi_period - 1,
-    " PRECEDING AND CURRENT ROW) AS avg_gain,
-            AVG(CASE WHEN volume_change < 0 THEN ABS(volume_change) ELSE 0 END) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    rsi_period - 1,
-    " PRECEDING AND CURRENT ROW) AS avg_loss
-        FROM
-            price_data
-    ),
-    force_index_data AS (
-        SELECT
-            symbol,
-            open_time,
-            close,
-            volume,
-            price_change,
-            -- Calculate Force Index
-            price_change * volume AS force_index_raw,
-            -- Smooth Force Index using Exponential Moving Average (EMA)
-            AVG(price_change * volume) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    force_index_smoothing - 1,
-    " PRECEDING AND CURRENT ROW) AS force_index_smoothed
-        FROM
-            price_data
+            *,
+            CASE WHEN vol_diff > 0 THEN vol_diff ELSE 0 END AS v_gain,
+            CASE WHEN vol_diff < 0 THEN ABS(vol_diff) ELSE 0 END AS v_loss,
+            (price_diff * volume) AS raw_force
+        FROM base_stats
     )
     SELECT
-        r.symbol,
-        r.open_time,
-        -- Calculate RSI_Volume
-        100 - (100 / (1 + NULLIF(r.avg_gain / NULLIF(r.avg_loss, 0), 0))) AS rsi_volume,
-        -- Include Force Index
-        f.force_index_smoothed AS force_index
-    FROM
-        rsi_data r
-    JOIN
-        force_index_data f
-    ON
-        r.symbol = f.symbol AND r.open_time = f.open_time
-    WHERE
-        r.avg_loss IS NOT NULL  -- Exclude rows where RSI cannot be calculated
-    ORDER BY
-        r.symbol,
-        r.open_time;"
+        symbol,
+        open_time,
+        -- RSI Volume Calculation
+        100 - (100 / (1 + (
+            AVG(v_gain) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    rsi_period - 1,
+    " PRECEDING AND CURRENT ROW) / 
+            NULLIF(AVG(v_loss) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    rsi_period - 1,
+    " PRECEDING AND CURRENT ROW), 0)
+        ))) AS rsi_volume,
+        -- Force Index (Smoothed)
+        AVG(raw_force) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    force_index_smoothing - 1,
+    " PRECEDING AND CURRENT ROW) AS force_index
+    FROM gain_loss_calc
+    ORDER BY symbol, open_time
+  "
   )
 
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
-
-  # Return the result
-  return(result)
+  result <- DBI::dbGetQuery(db_con, query) %>%
+    group_by(symbol) %>%
+    filter(row_number() >= min(rsi_period, force_index_smoothing)) %>% # Exclude warm-up rows
+    ungroup()
 }
 
-# Get different volume averages indicators
+#' Get Volume Averages and Anchored Indicators
+#' @description
+#' Calculates Anchored VWAP and OBV (Weekly reset for 1d, Daily reset for 1h)
+#' along with historical Volume SMAs and Relative Volume (RVOL).
+#' @param db_con A DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param periods Numeric vector for Volume SMAs (e.g., c(20, 50)).
+#'
+#' @return A data frame with anchored_vwap, anchored_obv, vol_sma_X, and vol_rel_X for each period.
+#' @export
 get_vol_averages <- function(
   db_con,
   timeframe = "1d",
   periods = c(20, 50, 150, 200)
 ) {
-  # Ensure that the 'volume_sma_period' is valid
-  if (!is.numeric(periods) || length(periods) == 0 || any(periods <= 0)) {
-    stop("'periods' must be a positive integer.")
+  # Validations
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  if (!is.numeric(periods) || any(periods <= 0) || length(periods) == 0) {
+    stop("'periods' must be a vector of positive integers.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_to_query <- table_map[timeframe]
 
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_data AS (
-          SELECT
-              symbol,
-              open_time,
-              close,
-              volume,
-              -- Calculate On-Balance Volume (OBV)
-              CASE WHEN close > LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time) THEN volume
-                       WHEN close < LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time) THEN -volume
-                       ELSE 0 END AS obv_temp,
-              -- Calculate Volume-Weighted Average Price (VWAP)
-              SUM(close * volume) OVER (PARTITION BY symbol ORDER BY open_time) / SUM(volume) OVER (PARTITION BY symbol ORDER BY open_time) AS vwap
-          FROM ",
-    table_to_query,
-    "
-      )
-      SELECT
-          symbol,
-          open_time,
-          vwap,
-          SUM(obv_temp) OVER (PARTITION BY symbol ORDER BY open_time) AS obv"
-  )
-
-  # Loop over each period and add the corresponding AVG window function to the query
-  for (period in periods) {
-    # Dynamically generate the SQL for each period
-    select_query <- paste0(
-      select_query,
-      ", AVG(volume) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-      (period - 1),
-      " PRECEDING AND CURRENT ROW) AS vol_sma_",
-      period,
-      ", volume / NULLIF(AVG(volume) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-      (period - 1),
-      " PRECEDING AND CURRENT ROW), 0) AS volume_relative_",
-      period
-    )
+  # 2. Define Anchor Logic
+  # 1h data resets every Day; 1d data resets every Week
+  anchor_sql <- if (timeframe == "1d") {
+    "DATE_TRUNC('week', open_time)"
+  } else {
+    "CAST(open_time AS DATE)"
   }
 
-  # Add the FROM clause
-  select_query <- paste0(select_query, " FROM price_data")
+  # 3. Construct SQL
+  # Part A: Base CTE with price-volume products and directional volume
+  base_query <- paste0(
+    "
+    WITH base_stats AS (
+        SELECT
+            symbol,
+            open_time,
+            close,
+            volume,
+            ",
+    anchor_sql,
+    " AS anchor_group,
+            CASE 
+                WHEN close > LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time) THEN volume
+                WHEN close < LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time) THEN -volume
+                ELSE 0 
+            END AS obv_delta,
+            (close * volume) AS pv_delta
+        FROM ",
+    table_to_query,
+    "
+    ),
+    periodic_indicators AS (
+        SELECT 
+            *,
+            -- Anchored OBV (resets at the anchor)
+            SUM(obv_delta) OVER (PARTITION BY symbol, anchor_group ORDER BY open_time) AS anchored_obv,
+            -- Anchored VWAP (resets at the anchor)
+            SUM(pv_delta) OVER (PARTITION BY symbol, anchor_group ORDER BY open_time) / 
+                NULLIF(SUM(volume) OVER (PARTITION BY symbol, anchor_group ORDER BY open_time), 0) AS anchored_vwap
+        FROM base_stats
+    )
+    SELECT symbol, open_time, close, volume, anchored_vwap, anchored_obv"
+  )
 
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
+  # Part B: Add Dynamic Moving Averages (These do NOT reset; they provide historical context)
+  window_funcs <- vapply(
+    periods,
+    function(p) {
+      paste0(
+        ", AVG(volume) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+        p - 1,
+        " PRECEDING AND CURRENT ROW) AS vol_sma_",
+        p,
+        ", volume / NULLIF(AVG(volume) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+        p - 1,
+        " PRECEDING AND CURRENT ROW), 0) AS vol_rel_",
+        p
+      )
+    },
+    character(1)
+  )
 
-  # Return the result
+  full_query <- paste0(
+    base_query,
+    paste(window_funcs, collapse = ""),
+    " FROM periodic_indicators ORDER BY symbol, open_time"
+  )
+
+  # 4. Execute
+  result <- DBI::dbGetQuery(db_con, full_query)
+
   return(result)
 }
 
-# Get the Keltner Bands for a given period
+#' Get Keltner Bands
+#'
+#' @description
+#' Calculates Keltner Channels (Upper, Middle, and Lower bands) based on
+#' price volatility (ATR) and a central moving average.
+#'
+#' @param db_con A valid DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param period Integer. Lookback window for the moving average and ATR (default 20).
+#' @param multiplier Numeric. Volatility expansion factor (default 2).
+#'
+#' @return A data frame containing symbol, open_time, keltner_middle, keltner_upper, and keltner_lower.
+#' @export
 get_keltner_bands <- function(
   db_con,
   timeframe = "1d",
   period = 20,
   multiplier = 2
 ) {
-  # Ensure that the 'period' and 'multiplier' are valid
-  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
-    stop("'period' must be a positive integer.")
-  }
-  if (!is.numeric(multiplier) || length(multiplier) != 1 || multiplier <= 0) {
-    stop("'multiplier' must be a positive number.")
+  # Validations
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
+    stop("'period' must be a single positive integer.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_to_query <- table_map[timeframe]
 
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_data AS (
+  if (length(multiplier) != 1 || multiplier <= 0) {
+    stop("multiplier must be a positive number.")
+  }
+
+  # SQL Query
+  query <- paste0(
+    "
+    WITH raw_ranges AS (
         SELECT
             symbol,
             open_time,
             close,
-            high,
-            low,
-            -- Calculate true range
             GREATEST(
                 high - low,
                 ABS(high - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)),
                 ABS(low - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time))
-            ) AS true_range
+            ) AS tr
         FROM ",
     table_to_query,
     "
     ),
-    keltner_data AS (
+    stats AS (
         SELECT
             symbol,
             open_time,
-            close,
-            -- Calculate EMA of close (middle band)
             AVG(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS middle_band,
-            -- Calculate ATR
-            AVG(true_range) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS atr
-        FROM
-            price_data
+    period - 1,
+    " PRECEDING AND CURRENT ROW) AS mid,
+            AVG(tr) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW) AS atr,
+            ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY open_time) AS row_num
+        FROM raw_ranges
     )
     SELECT
         symbol,
         open_time,
-        middle_band AS keltner_middle,
-        -- Calculate upper band (middle_band + multiplier * atr)
-        middle_band + (",
+        mid AS keltner_middle,
+        mid + (",
     multiplier,
     " * atr) AS keltner_upper,
-        -- Calculate lower band (middle_band - multiplier * atr)
-        middle_band - (",
+        mid - (",
     multiplier,
     " * atr) AS keltner_lower
-    FROM
-        keltner_data
-    ORDER BY
-        symbol,
-        open_time;"
+    FROM stats
+    WHERE row_num >= ",
+    period,
+    "
+    ORDER BY symbol, open_time
+  "
   )
 
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
-
-  # Return the result
-  return(result)
+  return(DBI::dbGetQuery(db_con, query))
 }
 
-# get the ADX indicator
+
+#' Get Average Directional Index (ADX)
+#' @description Calculates +DI, -DI, and ADX to determine trend strength.
+#' @param db_con A DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param period Integer. Lookback window (default 14).
+#'
+#' @return A data frame containing symbol, open_time, plus_di, minus_di, and adx.
+#' @export
 get_adx <- function(db_con, timeframe = "1d", period = 14) {
-  # Ensure that the 'period' is valid
-  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
-    stop("'period' must be a positive integer.")
+  # Validations
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
+    stop("'period' must be a single positive integer.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_to_query <- table_map[timeframe]
 
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_data AS (
+  # SQL Query: We break down the ADX calculation into multiple CTEs for clarity and correctness.
+  query <- paste0(
+    "
+    WITH raw_dm AS (
         SELECT
-            symbol,
-            open_time,
-            high,
-            low,
-            close,
-            -- Calculate true range
-            GREATEST(
-                high - low,
-                ABS(high - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time)),
-                ABS(low - LAG(close, 1) OVER (PARTITION BY symbol ORDER BY open_time))
-            ) AS true_range,
-            -- Calculate +DM and -DM
-            CASE WHEN (high - LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time)) > 
-                      (LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time) - low)
-                 THEN GREATEST(high - LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time), 0)
-                 ELSE 0 END AS plus_dm,
-            CASE WHEN (LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time) - low) > 
-                      (high - LAG(high, 1) OVER (PARTITION BY symbol ORDER BY open_time))
-                 THEN GREATEST(LAG(low, 1) OVER (PARTITION BY symbol ORDER BY open_time) - low, 0)
-                 ELSE 0 END AS minus_dm
+            symbol, open_time, high, low,
+            GREATEST(high - low, 
+                     ABS(high - LAG(close) OVER (PARTITION BY symbol ORDER BY open_time)), 
+                     ABS(low - LAG(close) OVER (PARTITION BY symbol ORDER BY open_time))) AS tr,
+            high - LAG(high) OVER (PARTITION BY symbol ORDER BY open_time) AS up_move,
+            LAG(low) OVER (PARTITION BY symbol ORDER BY open_time) - low AS down_move
         FROM ",
     table_to_query,
     "
     ),
-    smoothed_data AS (
+    directional_movement AS (
+        SELECT 
+            *,
+            CASE WHEN up_move > down_move AND up_move > 0 THEN up_move ELSE 0 END AS plus_dm,
+            CASE WHEN down_move > up_move AND down_move > 0 THEN down_move ELSE 0 END AS minus_dm
+        FROM raw_dm
+    ),
+    smoothed_stats AS (
         SELECT
-            symbol,
-            open_time,
-            true_range,
-            plus_dm,
-            minus_dm,
-            -- Calculate smoothed true range, +DM, and -DM
-            AVG(true_range) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS smoothed_tr,
+            symbol, open_time,
+            AVG(tr) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW) AS str,
             AVG(plus_dm) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS smoothed_plus_dm,
+    period - 1,
+    " PRECEDING AND CURRENT ROW) AS s_plus_dm,
             AVG(minus_dm) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS smoothed_minus_dm
-        FROM
-            price_data
+    period - 1,
+    " PRECEDING AND CURRENT ROW) AS s_minus_dm
+        FROM directional_movement
     ),
-    di_data AS (
+    di_calc AS (
         SELECT
-            symbol,
-            open_time,
-            -- Calculate +DI and -DI
-            100 * (smoothed_plus_dm / smoothed_tr) AS plus_di,
-            100 * (smoothed_minus_dm / smoothed_tr) AS minus_di
-        FROM
-            smoothed_data
+            symbol, open_time,
+            100 * (s_plus_dm / NULLIF(str, 0)) AS plus_di,
+            100 * (s_minus_dm / NULLIF(str, 0)) AS minus_di
+        FROM smoothed_stats
     ),
-    adx_data AS (
+    dx_calc AS (
         SELECT
-            symbol,
-            open_time,
-            plus_di,
-            minus_di,
-            -- Calculate DX
-            100 * (ABS(plus_di - minus_di) / (plus_di + minus_di)) AS dx,
-            -- Calculate ADX (smoothed DX)
-            AVG(100 * (ABS(plus_di - minus_di) / (plus_di + minus_di))) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS adx
-        FROM
-            di_data
+            *,
+            100 * (ABS(plus_di - minus_di) / NULLIF(plus_di + minus_di, 0)) AS dx
+        FROM di_calc
     )
     SELECT
-        symbol,
-        open_time,
-        plus_di,
-        minus_di,
-        adx
-    FROM
-        adx_data
-    ORDER BY
-        symbol,
-        open_time;"
+        symbol, open_time, plus_di, minus_di,
+        AVG(dx) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW) AS adx
+    FROM dx_calc
+    ORDER BY symbol, open_time
+  "
   )
 
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
-
-  # Return the result
+  result <- DBI::dbGetQuery(db_con, query) %>%
+    group_by(symbol) %>%
+    filter(row_number() >= period) %>% # Exclude warm-up rows
+    ungroup()
   return(result)
 }
 
-# Get the CCI
+#' Get Commodity Channel Index (CCI)
+#'
+#' @description
+#' Calculates the CCI based on Typical Price and its Mean Deviation.
+#' Commonly used to identify overbought/oversold levels or trend starts.
+#'
+#' @param db_con A valid DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param period Integer. Lookback window (default 20).
+#'
+#' @return A data frame containing symbol, open_time, and cci.
+#' @export
 get_cci <- function(db_con, timeframe = "1d", period = 20) {
-  # Ensure that the 'period' is valid
-  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
-    stop("'period' must be a positive integer.")
+  # Validations
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
   }
 
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  if (!is.numeric(period) || length(period) != 1 || period <= 0) {
+    stop("'period' must be a single positive integer.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_to_query <- table_map[timeframe]
 
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_data AS (
+  query <- paste0(
+    "
+    WITH tp_data AS (
         SELECT
             symbol,
             open_time,
-            high,
-            low,
-            close,
-            -- Calculate typical price
-            (high + low + close) / 3 AS typical_price
+            (high + low + close) / 3 AS tp
         FROM ",
     table_to_query,
     "
     ),
-    cci_data AS (
+    ma_data AS (
         SELECT
-            symbol,
-            open_time,
-            close,
-            typical_price,
-            -- Calculate moving average of typical price
-            AVG(typical_price) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW) AS ma_typical_price,
-            -- Calculate mean deviation of typical price
-            ABS(typical_price - AVG(typical_price) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW)) AS deviation
-        FROM
-            price_data
+            *,
+            AVG(tp) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW) AS avg_tp
+        FROM tp_data
+    ),
+    dev_data AS (
+        SELECT
+            *,
+            ABS(tp - avg_tp) AS absolute_deviation
+        FROM ma_data
     )
     SELECT
         symbol,
         open_time,
-        
-        -- Calculate CCI
-        (typical_price - ma_typical_price) / (0.015 * AVG(deviation) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (period - 1),
-    " PRECEDING AND CURRENT ROW)) AS cci
-    FROM
-        cci_data
-    ORDER BY
-        symbol,
-        open_time;"
+        (tp - avg_tp) / NULLIF(0.015 * AVG(absolute_deviation) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    period - 1,
+    " PRECEDING AND CURRENT ROW), 0) AS cci
+    FROM dev_data
+    ORDER BY symbol, open_time
+  "
   )
 
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
-
-  # Return the result
+  result <- DBI::dbGetQuery(db_con, query) %>%
+    group_by(symbol) %>%
+    filter(row_number() >= period) %>% # Exclude warm-up rows
+    ungroup()
   return(result)
 }
 
-# get ichimoku cloud indicator
+#' Get Ichimoku Cloud Indicators
+#'
+#' @description
+#' Calculates all five components of the Ichimoku Kinko Hyo.
+#' Note: Senkou Spans are shifted back to the current row to represent
+#' the active cloud levels for strategy testing.
+#'
+#' @param db_con A valid DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param tenkan_period Integer (Default 9).
+#' @param kijun_period Integer (Default 26).
+#' @param senkou_b_period Integer (Default 52).
+#' @param chikou_shift Integer (Default 26). Also used for Chikou Span.
+#'
+#' @return A data frame containing symbol, open_time, tenkan_sen, kijun_sen, senkou_span_a, senkou_span_b, and chikou_span.
+#' @export
 get_ichimoku_cloud <- function(
   db_con,
   timeframe = "1d",
@@ -1382,10 +1260,19 @@ get_ichimoku_cloud <- function(
   senkou_b_period = 52,
   chikou_shift = 26
 ) {
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
+  # Validations
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
     stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
+
+  table_to_query <- table_map[timeframe]
 
   # Ensure that the periods are valid
   if (
@@ -1408,212 +1295,186 @@ get_ichimoku_cloud <- function(
     "1h" = "hourly_prices"
   )
 
-  # Initialize the SELECT part of the query
-  select_query <- paste0(
-    "WITH price_data AS (
+  query <- paste0(
+    "
+    WITH raw_ranges AS (
         SELECT
-            symbol,
-            open_time,
-            high,
-            low,
-            close
+            symbol, open_time, close,
+            (MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    tenkan_period - 1,
+    " PRECEDING AND CURRENT ROW) + 
+             MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    tenkan_period - 1,
+    " PRECEDING AND CURRENT ROW)) / 2 AS tenkan,
+            (MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    kijun_period - 1,
+    " PRECEDING AND CURRENT ROW) + 
+             MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    kijun_period - 1,
+    " PRECEDING AND CURRENT ROW)) / 2 AS kijun,
+            (MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    senkou_b_period - 1,
+    " PRECEDING AND CURRENT ROW) + 
+             MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
+    senkou_b_period - 1,
+    " PRECEDING AND CURRENT ROW)) / 2 AS span_b_raw
         FROM ",
     table_to_query,
     "
     ),
-    ichimoku_data AS (
-        SELECT
-            symbol,
-            open_time,
-            close,
-            -- Calculate Tenkan-sen (Conversion Line)
-            (MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (tenkan_period - 1),
-    " PRECEDING AND CURRENT ROW) + 
-            MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (tenkan_period - 1),
-    " PRECEDING AND CURRENT ROW)) / 2 AS tenkan_sen,
-            -- Calculate Kijun-sen (Base Line)
-            (MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (kijun_period - 1),
-    " PRECEDING AND CURRENT ROW) + 
-            MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (kijun_period - 1),
-    " PRECEDING AND CURRENT ROW)) / 2 AS kijun_sen,
-            -- Calculate Senkou Span A (Leading Span A)
-            ((MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (tenkan_period - 1),
-    " PRECEDING AND CURRENT ROW) + 
-             MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (tenkan_period - 1),
-    " PRECEDING AND CURRENT ROW)) / 2 +
-            (MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (kijun_period - 1),
-    " PRECEDING AND CURRENT ROW) + 
-             MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (kijun_period - 1),
-    " PRECEDING AND CURRENT ROW)) / 2) / 2 AS senkou_span_a,
-            -- Calculate Senkou Span B (Leading Span B)
-            (MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (senkou_b_period - 1),
-    " PRECEDING AND CURRENT ROW) + 
-            MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN ",
-    (senkou_b_period - 1),
-    " PRECEDING AND CURRENT ROW)) / 2 AS senkou_span_b,
-            -- Calculate Chikou Span (Lagging Span)
-            LAG(close, ",
+    ichimoku_base AS (
+        SELECT 
+            *,
+            (tenkan + kijun) / 2 AS span_a_raw,
+            -- Chikou Span is the current close projected back 26 periods
+            LEAD(close, ",
     chikou_shift,
-    ") OVER (PARTITION BY symbol ORDER BY open_time) AS chikou_span,
-            -- Add row number for filtering
-            ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY open_time) AS row_num
-        FROM
-            price_data
+    ") OVER (PARTITION BY symbol ORDER BY open_time) AS chikou_span
+        FROM raw_ranges
     )
     SELECT
         symbol,
         open_time,
-        tenkan_sen,
-        kijun_sen,
-        senkou_span_a,
-        senkou_span_b,
+        tenkan AS tenkan_sen,
+        kijun AS kijun_sen,
+        -- The Cloud: We LAG the raw spans to see the cloud active AT THIS MOMENT
+        LAG(span_a_raw, ",
+    chikou_shift,
+    ") OVER (PARTITION BY symbol ORDER BY open_time) AS senkou_span_a,
+        LAG(span_b_raw, ",
+    chikou_shift,
+    ") OVER (PARTITION BY symbol ORDER BY open_time) AS senkou_span_b,
         chikou_span
-        -- Shift Senkou Span A and B by the Chikou shift period
-        -- LEAD(senkou_span_a, ",
-    chikou_shift,
-    ") OVER (PARTITION BY symbol ORDER BY open_time) AS senkou_span_a_shifted,
-        -- LEAD(senkou_span_b, ",
-    chikou_shift,
-    ") OVER (PARTITION BY symbol ORDER BY open_time) AS senkou_span_b_shifted
-    FROM
-        ichimoku_data
-    WHERE row_num > ",
-    senkou_b_period,
-    "
-    ORDER BY
-        symbol,
-        open_time;"
+    FROM ichimoku_base
+    ORDER BY symbol, open_time
+  "
   )
 
   # Execute the query
-  result <- dbGetQuery(db_con, select_query)
+  result <- DBI::dbGetQuery(db_con, query) %>%
+    group_by(symbol) %>%
+    filter(
+      row_number() >
+        min(tenkan_period, kijun_period, senkou_b_period) + chikou_shift
+    ) %>% # Exclude warm-up rows
+    ungroup()
 
   # Return the result
   return(result)
 }
 
-# get returns / price moves / results
-get_price_moves <- function(
-  db_con,
-  timeframe = "1d",
-  periods = c(1, 5, 10)
-) {
-  # Ensure that the 'timeframe' is valid
-  if (!timeframe %in% c("1d", "1h")) {
-    stop("Invalid timeframe. Supported values are '1d', '1h'.")
+#' Get Future Price Moves (ML Targets)
+#' @description Calculates future max rise, max drop, and net change for specified windows.
+#' @param db_con A DBI connection object.
+#' @param timeframe Character ("1d" or "1h").
+#' @param periods Numeric vector of forward-looking windows (e.g., c(1, 5, 10)).
+get_price_moves <- function(db_con, timeframe = "1d", periods = c(1, 5, 10)) {
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
   }
 
-  # Ensure that the 'periods' are valid
-  if (!is.numeric(periods) || any(periods <= 0)) {
+  if (!is.numeric(periods) || any(periods <= 0) || length(periods) == 0) {
     stop("'periods' must be a vector of positive integers.")
   }
 
-  # Select the correct table based on the 'timeframe'
-  table_to_query <- switch(
-    timeframe,
-    "1d" = "daily_prices",
-    "1h" = "hourly_prices"
-  )
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
 
-  # Initialize the WITH clause of the query
-  select_query <- paste0(
-    "WITH price_data AS (
-        SELECT
-            symbol,
-            open_time,
-            close"
-  )
-
-  # Add window function columns for each period
-  for (period in periods) {
-    select_query <- paste0(
-      select_query,
-      ",\n            MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN 1 FOLLOWING AND ",
-      period,
-      " FOLLOWING) AS max_high_",
-      period,
-      ",\n            MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN 1 FOLLOWING AND ",
-      period,
-      " FOLLOWING) AS min_low_",
-      period,
-      ",\n            LAST_VALUE(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN 1 FOLLOWING AND ",
-      period,
-      " FOLLOWING) AS future_close_",
-      period
-    )
+  if (!timeframe %in% names(table_map)) {
+    stop("Invalid timeframe. Supported values are '1d', '1h'.")
   }
 
-  # Complete the WITH clause
-  select_query <- paste0(
-    select_query,
-    "\n        FROM ",
+  table_to_query <- table_map[timeframe]
+
+  # Build columns for the CTE
+  future_cols <- vapply(
+    periods,
+    function(p) {
+      paste0(
+        "MAX(high) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN 1 FOLLOWING AND ",
+        p,
+        " FOLLOWING) AS f_max_",
+        p,
+        ", ",
+        "MIN(low) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN 1 FOLLOWING AND ",
+        p,
+        " FOLLOWING) AS f_min_",
+        p,
+        ", ",
+        "LAST_VALUE(close) OVER (PARTITION BY symbol ORDER BY open_time ROWS BETWEEN 1 FOLLOWING AND ",
+        p,
+        " FOLLOWING) AS f_close_",
+        p
+      )
+    },
+    character(1)
+  )
+
+  # Build the calculations for the final SELECT
+  calc_cols <- vapply(
+    periods,
+    function(p) {
+      paste0(
+        "(f_max_",
+        p,
+        " - close) / NULLIF(close, 0) * 100 AS target_max_rise_",
+        p,
+        ", ",
+        "(f_min_",
+        p,
+        " - close) / NULLIF(close, 0) * 100 AS target_max_drop_",
+        p,
+        ", ",
+        "(f_close_",
+        p,
+        " - close) / NULLIF(close, 0) * 100 AS target_net_change_",
+        p
+      )
+    },
+    character(1)
+  )
+
+  # Build the WHERE clause to clean up the 'tail' of the data
+  filter_clauses <- paste0(
+    "f_max_",
+    periods,
+    " IS NOT NULL",
+    collapse = " AND "
+  )
+
+  query <- paste0(
+    "
+    WITH future_data AS (
+        SELECT symbol, open_time, close,
+        ",
+    paste(future_cols, collapse = ",\n        "),
+    "
+        FROM ",
     table_to_query,
     "
     )
-    SELECT
-        symbol,
-        open_time"
+    SELECT symbol, open_time,
+    ",
+    paste(calc_cols, collapse = ",\n    "),
+    "
+    FROM future_data
+    WHERE ",
+    filter_clauses,
+    "
+    ORDER BY symbol, open_time
+  "
   )
 
-  # Add return calculations for each period
-  for (period in periods) {
-    select_query <- paste0(
-      select_query,
-      ",\n        (max_high_",
-      period,
-      " - close) / close * 100 AS check_max_rise_",
-      period,
-      ",\n        (min_low_",
-      period,
-      " - close) / close * 100 AS check_max_drop_",
-      period,
-      ",\n        (future_close_",
-      period,
-      " - close) / close * 100 AS check_net_change_",
-      period
-    )
-  }
-
-  # Complete the query
-  select_query <- paste0(
-    select_query,
-    "\n    FROM price_data"
-  )
-
-  # Add WHERE clause to exclude rows with NULL values for any period
-  where_clauses <- sapply(periods, function(p) {
-    c(
-      paste0("max_high_", p, " IS NOT NULL"),
-      paste0("min_low_", p, " IS NOT NULL"),
-      paste0("future_close_", p, " IS NOT NULL")
-    )
-  })
-
-  select_query <- paste0(
-    select_query,
-    "\n    WHERE ",
-    paste(where_clauses, collapse = " AND "),
-    "\n    ORDER BY symbol, open_time;"
-  )
-
-  # Execute the query
-  result <- dbGetQuery(db_con, select_query)
-
-  # Return the result
-  return(result)
+  return(DBI::dbGetQuery(db_con, query))
 }
 
 # # Get the earnings calendar
 get_earnings_calendar <- function(db_con) {
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+  # 2. SQL Query to get the earnings calendar with period labels and end dates
   earnings_calendar <- dbGetQuery(
     db_con,
     "SELECT 
@@ -1644,6 +1505,11 @@ get_eps_estimates <- function(
   start_date = NULL,
   end_date = NULL
 ) {
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
   # Base SQL query
   sql_query <- "
     WITH eps_data AS (
@@ -1734,6 +1600,11 @@ get_eps_history <- function(
   start_date = NULL,
   end_date = NULL
 ) {
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
   # Base SQL query
   sql_query <- "WITH eps_history_data AS (
                   SELECT
@@ -1844,6 +1715,11 @@ get_eps_data <- function(
   symbols_price_data
   # , fake_Q3_2019 = FALSE
 ) {
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
   symbol <- symbols_price_data$symbol %>%
     unique()
 
@@ -1892,119 +1768,44 @@ get_eps_data <- function(
   return(new_data)
 }
 
-# get the xgb model as an indicator
-get_xgb_indicator <- function(model_labels) {
-  # Connect to the model database
-  db_name <- "models_data.duckdb"
-  # check if I'm running in windows or linux
-  if (.Platform$OS.type == "windows") {
-    db_path <- file.path("Z:/stock_data", db_name)
-  } else {
-    db_path <- file.path("/mnt/nas_nuvens/stock_data", db_name)
-  }
+# Fix specific problematic columns in existing data
+fix_financial_infinities <- function(eps_data) {
+  # Define winsorization limits - adjust these based on your data distribution
+  upper_limit <- 1000 # Cap very large positive values (e.g., 1000%)
+  lower_limit <- -1000 # Cap very large negative values
 
-  # Database db_con
-  model_conn <- dbConnect(
-    duckdb(),
-    dbdir = db_path,
-    read_only = FALSE
-  )
-
-  model_labels <- paste0("'", model_labels, "'", collapse = ", ")
-
-  # Query the data
-  sql_query <- paste0(
-    "SELECT * 
-                      FROM xgb_indicator
-                      WHERE model_label IN (",
-    model_labels,
-    ")"
-  )
-
-  # load the data
-  xgb_indicator <- dbGetQuery(model_conn, sql_query)
-
-  # disconnect from the model database
-  dbDisconnect(model_conn)
-
-  return(xgb_indicator)
-}
-
-
-# Check the high before the low for TP ans SL filters
-check_high_before_low <- function(
-  price_data,
-  high_threshold = 3,
-  low_threshold = -3,
-  max_period = 5
-) {
-  # Ensure data is properly sorted
-  price_data <- price_data %>%
-    arrange(symbol, open_time) %>%
-    group_by(symbol) %>%
+  eps_data %>%
     mutate(
-      # Create rolling windows for future highs and lows
-      future_highs = purrr::map(
-        row_number(),
-        ~ if (.x + max_period <= n()) {
-          high[.x:(.x + max_period - 1)]
-        } else {
-          high[.x:n()]
-        }
-      ),
-      future_lows = purrr::map(
-        row_number(),
-        ~ if (.x + max_period <= n()) {
-          low[.x:(.x + max_period - 1)]
-        } else {
-          low[.x:n()]
-        }
+      # Handle consensus_change_percent - Winsorize extreme values
+      consensus_change_percent = case_when(
+        is.infinite(consensus_change_percent) & consensus_change_percent > 0 ~
+          upper_limit,
+        is.infinite(consensus_change_percent) & consensus_change_percent < 0 ~
+          lower_limit,
+        !is.infinite(consensus_change_percent) ~ consensus_change_percent
       ),
 
-      # Calculate percentage changes from current close
-      high_pct_changes = purrr::map2(
-        future_highs,
-        close,
-        ~ (.x - .y) / .y * 100
+      # Handle dispersion_ratio - Typically non-negative, cap at reasonable maximum
+      dispersion_ratio = case_when(
+        is.infinite(dispersion_ratio) ~ 10, # Cap at 10 (extremely high dispersion)
+        !is.infinite(dispersion_ratio) ~ dispersion_ratio
       ),
-      low_pct_changes = purrr::map2(future_lows, close, ~ (.x - .y) / .y * 100),
 
-      # Check if high threshold is reached before low threshold in each window
-      check_high_before_low = purrr::map2_lgl(
-        high_pct_changes,
-        low_pct_changes,
-        ~ {
-          # Find first positions where thresholds are crossed
-          high_pos = which(.x >= high_threshold)
-          low_pos = which(.y <= low_threshold)
+      # Handle surprise_to_dispersion - Can be positive or negative
+      surprise_to_dispersion = case_when(
+        is.infinite(surprise_to_dispersion) & surprise_to_dispersion > 0 ~
+          upper_limit,
+        is.infinite(surprise_to_dispersion) & surprise_to_dispersion < 0 ~
+          lower_limit,
+        !is.infinite(surprise_to_dispersion) ~ surprise_to_dispersion
+      ),
 
-          # If neither threshold is hit, return FALSE
-          if (length(high_pos) == 0 && length(low_pos) == 0) {
-            return(FALSE)
-          }
-
-          # If only high is hit, return TRUE
-          if (length(high_pos) > 0 && length(low_pos) == 0) {
-            return(TRUE)
-          }
-
-          # If only low is hit, return FALSE
-          if (length(high_pos) == 0 && length(low_pos) > 0) {
-            return(FALSE)
-          }
-
-          # Compare which threshold was hit first
-          min(high_pos) < min(low_pos)
-        }
+      # Handle high_uncertainty_surprise - Typically non-negative
+      high_uncertainty_surprise = case_when(
+        is.infinite(high_uncertainty_surprise) ~ upper_limit,
+        !is.infinite(high_uncertainty_surprise) ~ high_uncertainty_surprise
       )
-    ) %>%
-    select(-future_highs, -future_lows, -high_pct_changes, -low_pct_changes) %>%
-    ungroup()
-
-  # Remove auxiliary row_num column
-  price_data$row_num <- NULL
-
-  return(price_data)
+    )
 }
 
 # Function to join everything
@@ -2223,57 +2024,143 @@ create_earnings_features <- function(
   return(result)
 }
 
+# get the xgb model as an indicator
+get_xgb_indicator <- function(model_labels) {
+  # Connect to the model database
+  db_name <- "models_data.duckdb"
+  # check if I'm running in windows or linux
+  if (.Platform$OS.type == "windows") {
+    db_path <- file.path("Z:/stock_data", db_name)
+  } else {
+    db_path <- file.path("/mnt/nas_nuvens/stock_data", db_name)
+  }
 
-# Fix specific problematic columns in existing data
-fix_financial_infinities <- function(eps_data) {
-  # Define winsorization limits - adjust these based on your data distribution
-  upper_limit <- 1000 # Cap very large positive values (e.g., 1000%)
-  lower_limit <- -1000 # Cap very large negative values
+  # Database db_con
+  model_conn <- dbConnect(
+    duckdb(),
+    dbdir = db_path,
+    read_only = FALSE
+  )
 
-  eps_data %>%
-    mutate(
-      # Handle consensus_change_percent - Winsorize extreme values
-      consensus_change_percent = case_when(
-        is.infinite(consensus_change_percent) & consensus_change_percent > 0 ~
-          upper_limit,
-        is.infinite(consensus_change_percent) & consensus_change_percent < 0 ~
-          lower_limit,
-        !is.infinite(consensus_change_percent) ~ consensus_change_percent
-      ),
+  model_labels <- paste0("'", model_labels, "'", collapse = ", ")
 
-      # Handle dispersion_ratio - Typically non-negative, cap at reasonable maximum
-      dispersion_ratio = case_when(
-        is.infinite(dispersion_ratio) ~ 10, # Cap at 10 (extremely high dispersion)
-        !is.infinite(dispersion_ratio) ~ dispersion_ratio
-      ),
+  # Query the data
+  sql_query <- paste0(
+    "SELECT * 
+                      FROM xgb_indicator
+                      WHERE model_label IN (",
+    model_labels,
+    ")"
+  )
 
-      # Handle surprise_to_dispersion - Can be positive or negative
-      surprise_to_dispersion = case_when(
-        is.infinite(surprise_to_dispersion) & surprise_to_dispersion > 0 ~
-          upper_limit,
-        is.infinite(surprise_to_dispersion) & surprise_to_dispersion < 0 ~
-          lower_limit,
-        !is.infinite(surprise_to_dispersion) ~ surprise_to_dispersion
-      ),
+  # load the data
+  xgb_indicator <- dbGetQuery(model_conn, sql_query)
 
-      # Handle high_uncertainty_surprise - Typically non-negative
-      high_uncertainty_surprise = case_when(
-        is.infinite(high_uncertainty_surprise) ~ upper_limit,
-        !is.infinite(high_uncertainty_surprise) ~ high_uncertainty_surprise
-      )
-    )
+  # disconnect from the model database
+  dbDisconnect(model_conn)
+
+  return(xgb_indicator)
 }
+
+
+# Check the high before the low for TP ans SL filters
+check_high_before_low <- function(
+  price_data,
+  high_threshold = 3,
+  low_threshold = -3,
+  max_period = 5
+) {
+  # Ensure data is properly sorted
+  price_data <- price_data %>%
+    arrange(symbol, open_time) %>%
+    group_by(symbol) %>%
+    mutate(
+      # Create rolling windows for future highs and lows
+      future_highs = purrr::map(
+        row_number(),
+        ~ if (.x + max_period <= n()) {
+          high[.x:(.x + max_period - 1)]
+        } else {
+          high[.x:n()]
+        }
+      ),
+      future_lows = purrr::map(
+        row_number(),
+        ~ if (.x + max_period <= n()) {
+          low[.x:(.x + max_period - 1)]
+        } else {
+          low[.x:n()]
+        }
+      ),
+
+      # Calculate percentage changes from current close
+      high_pct_changes = purrr::map2(
+        future_highs,
+        close,
+        ~ (.x - .y) / .y * 100
+      ),
+      low_pct_changes = purrr::map2(future_lows, close, ~ (.x - .y) / .y * 100),
+
+      # Check if high threshold is reached before low threshold in each window
+      check_high_before_low = purrr::map2_lgl(
+        high_pct_changes,
+        low_pct_changes,
+        ~ {
+          # Find first positions where thresholds are crossed
+          high_pos = which(.x >= high_threshold)
+          low_pos = which(.y <= low_threshold)
+
+          # If neither threshold is hit, return FALSE
+          if (length(high_pos) == 0 && length(low_pos) == 0) {
+            return(FALSE)
+          }
+
+          # If only high is hit, return TRUE
+          if (length(high_pos) > 0 && length(low_pos) == 0) {
+            return(TRUE)
+          }
+
+          # If only low is hit, return FALSE
+          if (length(high_pos) == 0 && length(low_pos) > 0) {
+            return(FALSE)
+          }
+
+          # Compare which threshold was hit first
+          min(high_pos) < min(low_pos)
+        }
+      )
+    ) %>%
+    select(-future_highs, -future_lows, -high_pct_changes, -low_pct_changes) %>%
+    ungroup()
+
+  # Remove auxiliary row_num column
+  price_data$row_num <- NULL
+
+  return(price_data)
+}
+
 
 # Function to get benchmarks indicators
 # This function loads and processes external market indexes data to use as benchmarks
 get_external_indexes <- function(
   db_con,
+  timeframe = "1d",
   start_date = NULL,
   end_date = NULL,
   symbols = NULL
 ) {
-  # Create a db_con to the database
-  db_con
+  # 1. Validation using your existing connection checker
+  if (!is_valid_db_connection(db_con)) {
+    stop("db_con must be a valid DBI connection.")
+  }
+
+  table_map <- c("1d" = "daily_prices", "1h" = "hourly_prices")
+
+  if (!timeframe %in% names(table_map)) {
+    stop("Invalid timeframe. Supported values are '1d', '1h'.")
+  }
+
+  table_to_query <- table_map[timeframe]
 
   # If no symbol is provided, fetch all external market indexes
   if (is.null(symbols)) {
@@ -2302,7 +2189,9 @@ get_external_indexes <- function(
 
   # Construct the SQL query to fetch data for the specified symbols
   sql_query <- paste0(
-    "SELECT * FROM daily_prices WHERE symbol IN (",
+    "SELECT * FROM ",
+    table_to_query,
+    " WHERE symbol IN (",
     symbols_list,
     ")"
   )
@@ -2317,8 +2206,8 @@ get_external_indexes <- function(
 
   # Execute the query and process the data
   external_indexes_data <- dbGetQuery(db_con, sql_query) %>%
-    select(symbol, open_time, close) %>%
-    pivot_wider(
+    dplyr::select(symbol, open_time, close) %>%
+    tidyr::pivot_wider(
       names_from = symbol,
       values_from = close
     )

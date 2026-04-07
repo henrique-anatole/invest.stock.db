@@ -2,10 +2,18 @@
 % Please edit documentation in R/indicators_functions.R
 \name{get_emas}
 \alias{get_emas}
-\title{Get the Exponential Moving Averages (EMA) for a given set of periods}
+\title{Calculate Multiple EMAs for a Timeseries}
 \usage{
 get_emas(timeseries, periods = c(20, 50, 150, 200))
 }
+\arguments{
+\item{timeseries}{A data frame containing 'symbol', 'close', and 'open_time'.}
+
+\item{periods}{A numeric vector of periods (e.g., 20, 50).}
+}
+\value{
+A grouped_df (or ungrouped df if fixed) with new columns 'ema_P'.
+}
 \description{
-Get the Exponential Moving Averages (EMA) for a given set of periods
+Calculate Multiple EMAs for a Timeseries
 }
