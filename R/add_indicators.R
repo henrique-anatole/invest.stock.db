@@ -1,3 +1,12 @@
+#' Orchestrate Indicator Addition
+#' @description Merges price data with technical indicators, fundamental data, and model predictions.
+#' @param all_symbol_data Dataframe containing 'symbol' and 'open_time'.
+#' @param indicators Character vector of requested indicator names.
+#' @param model_labels Optional labels for XGBoost model fetching.
+#' @param target_condition List containing success/failure thresholds.
+#' @param db_con Database connection object.
+#' @return A consolidated dataframe with all requested features.
+#' @export
 add_indicators <- function(
   all_symbol_data,
   indicators,
@@ -34,7 +43,6 @@ add_indicators <- function(
     prepared_data <- prepared_data %>%
       left_join(bollinger_bands, by = c("symbol", "open_time"))
   }
-
   # macd
   if (any(grepl("macd", indicators))) {
     prepared_data <- prepared_data %>%
@@ -85,12 +93,6 @@ add_indicators <- function(
     prepared_data <- prepared_data %>%
       left_join(pivots, by = c("symbol", "open_time"))
   }
-
-  # check for duplicated lines looking to symbls and date
-  # duplicated_rows <- prepared_data %>%
-  #   group_by(symbol, open_time) %>%
-  #   filter(n() > 1)
-
   # RSI
   if (any(grepl("rsi", indicators))) {
     # load Oscillators if not already loaded
@@ -273,7 +275,6 @@ add_indicators <- function(
       # , fake_Q3_2019 = FALSE
     )
   }
-
   # xgb_model
   if (any(grepl("xgb_model", indicators)) & !is.null(model_labels)) {
     xgb_model <- get_xgb_indicator(model_labels = model_labels)
@@ -301,7 +302,6 @@ add_indicators <- function(
         left_join(xgboost_indicators[[i]], by = c("symbol", "open_time"))
     }
   }
-
   # Check if any variable in target_condition is NA. If all are valid, we run this target check
   if (
     !is.null(target_condition) &
@@ -318,13 +318,11 @@ add_indicators <- function(
       max_period = max_period
     )
   }
-
   # week and month days
   if (any(grepl("calendar", indicators))) {
     prepared_data <- prepared_data %>%
       mutate(weekday = wday(open_time), day_of_month = day(open_time))
   }
-
   # Load price moves
   price_moves <- get_price_moves(db_con)
 
