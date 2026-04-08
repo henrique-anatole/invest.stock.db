@@ -12,7 +12,6 @@
 #' A sample dataset containing fundamental financial data for "AAPL", "MSFT", "GOOGL".
 #' Its used for testing and demonstration purposes.
 #'
-#'
 "sample_fundamentals"
 
 #' Sample of stock price data

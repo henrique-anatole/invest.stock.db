@@ -210,6 +210,5 @@ testthat::test_that("update_stock_prices: Working examples for hourly", {
   DBI::dbRemoveTable(temp_con, "hourly_prices")
 })
 
-
 # Disconnect and remove the temporary database
 DBI::dbDisconnect(temp_con, shutdown = TRUE)

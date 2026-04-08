@@ -2,25 +2,23 @@
 temp_db <- tempfile(fileext = ".duckdb")
 temp_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = temp_db, read_only = FALSE)
 
-price_data <- readRDS("data/sample_stock_prices.rds")
+
 # Add each of the tables from the sample_stock_prices dataset to the temporary database for testing
-for (table_name in names(price_data)) {
+for (table_name in names(sample_stock_prices)) {
   DBI::dbWriteTable(
     temp_con,
     table_name,
-    price_data[[table_name]],
+    sample_stock_prices[[table_name]],
     overwrite = TRUE
   )
 }
 
-# Disconnect and remove the temporary database
-fundamental_data <- readRDS("data/sample_fundamentals.rds")
 # Add each of the tables from the sample_fundamentals dataset to the temporary database for testing
-for (table_name in names(fundamental_data)) {
+for (table_name in names(sample_fundamentals)) {
   DBI::dbWriteTable(
     temp_con,
     table_name,
-    fundamental_data[[table_name]],
+    sample_fundamentals[[table_name]],
     overwrite = TRUE
   )
 }
@@ -87,7 +85,7 @@ testthat::test_that("calculate_single_ema: Working examples", {
   temp_con_invalid <- NULL
   testthat::expect_error(
     get_smas(temp_con_invalid, timeframe = "1d", periods = c(20, 50)),
-    "db_con must be a valid DBI connection"
+    "temp_con must be a valid DBI connection"
   )
 })
 
@@ -248,7 +246,7 @@ testthat::test_that("get_macd calculates correctly", {
 testthat::test_that("get_volatilities calculates expected metrics", {
   periods <- c(10, 20)
   res <- get_volatilities(
-    db_con = temp_con,
+    temp_con = temp_con,
     timeframe = "1d",
     periods = periods
   )
@@ -495,6 +493,81 @@ testthat::test_that("get_earnings_calendar returns consistent and unique periods
 
   # 4. Data Integrity: Dates should be valid
   expect_false(any(is.na(res$date)))
+})
+
+testthat::test_that("get_eps_estimate", {
+  expect_silent(get_eps_estimates(temp_con))
+  expect_silent(get_eps_estimates(temp_con, symbol = character(0)))
+
+  expect_error(get_eps_estimates(temp_con, start_date = "not-a-date"))
+
+  res <- get_eps_estimates(temp_con, symbol = "AAPL")
+  expect_true(all(
+    c("act_symbol", "period_end_date", "period", "estimation_date") %in%
+      names(res)
+  ))
+  fakeres <- get_eps_estimates(temp_con, symbol = "FakeSymbol")
+  expect_equal(nrow(fakeres), 0)
+  expect_true(all(
+    names(res) %in%
+      names(fakeres)
+  ))
+})
+
+test_that("get_eps_history", {
+  expect_silent(get_eps_history(temp_con))
+  expect_silent(get_eps_history(temp_con, symbol = character(0)))
+
+  # Simulate data with estimate = 0
+  df <- data.frame(
+    eps_reported = 1,
+    eps_estimated = 0,
+    period_end_date = Sys.Date(),
+    symbol = "AAPL",
+    period_label = "2025-Q1"
+  )
+  expect_silent({
+    res <- get_eps_history(temp_con)
+    # Should not error on division by zero
+  })
+
+  res <- get_eps_history(temp_con) %>%
+    arrange(symbol, period_end_date)
+
+  expect_true(all(
+    c("symbol", "period_label", "eps_reported", "eps_estimated") %in% names(res)
+  ))
+})
+
+test_that("get_eps_data", {
+  df <- data.frame(not_symbol = "AAPL")
+  expect_error(get_eps_data(temp_con, df))
+
+  df <- data.frame(symbol = character(0))
+  expect_error(get_eps_data(temp_con, df))
+
+  df <- data.frame(symbol = "AAPL", open_time = Sys.Date())
+  res <- get_eps_data(temp_con, df)
+  expect_true(is.data.frame(res))
+})
+
+test_that("fix_financial_infinities", {
+  df <- data.frame(a = 1:3)
+  expect_silent(fix_financial_infinities(df))
+
+  df <- data.frame(
+    consensus_change_percent = c(Inf, -Inf, 0),
+    dispersion_ratio = c(Inf, 1, 2),
+    surprise_to_dispersion = c(Inf, -Inf, 0),
+    high_uncertainty_surprise = c(Inf, 1, 2)
+  )
+  res <- fix_financial_infinities(df)
+  expect_true(all(res$consensus_change_percent <= 1000))
+  expect_true(all(res$consensus_change_percent >= -1000))
+  expect_true(all(res$dispersion_ratio <= 10))
+  expect_true(all(res$surprise_to_dispersion <= 1000))
+  expect_true(all(res$surprise_to_dispersion >= -1000))
+  expect_true(all(res$high_uncertainty_surprise <= 1000))
 })
 
 # library(ggplot2)

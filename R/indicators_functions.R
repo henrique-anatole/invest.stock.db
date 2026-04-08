@@ -1368,6 +1368,8 @@ get_ichimoku_cloud <- function(
 #' @param db_con A DBI connection object.
 #' @param timeframe Character ("1d" or "1h").
 #' @param periods Numeric vector of forward-looking windows (e.g., c(1, 5, 10)).
+#' @return A data frame with target_max_rise_X, target_max_drop_X, and target_net_change_X for each period.
+#' @export
 get_price_moves <- function(db_con, timeframe = "1d", periods = c(1, 5, 10)) {
   # 1. Validation using your existing connection checker
   if (!is_valid_db_connection(db_con)) {
@@ -1468,7 +1470,11 @@ get_price_moves <- function(db_con, timeframe = "1d", periods = c(1, 5, 10)) {
   return(DBI::dbGetQuery(db_con, query))
 }
 
-# # Get the earnings calendar
+#' Get the earnings calendar
+#' @description Retrieves the earnings calendar with period labels and end dates.
+#' @param db_con A DBI connection object.
+#' @return A data frame with earnings calendar information.
+#' @export
 get_earnings_calendar <- function(db_con) {
   # 1. Validation using your existing connection checker
   if (!is_valid_db_connection(db_con)) {
@@ -1480,8 +1486,8 @@ get_earnings_calendar <- function(db_con) {
     "SELECT 
             act_symbol AS symbol,
             date,
-            IF(\"when\" = 'Before market open', TRUE, FALSE) AS before_open,
-            IF(\"when\" = 'After market close', TRUE, FALSE) AS after_close,
+            IF(LOWER(\"when\") LIKE 'before%', TRUE, FALSE) AS before_open,
+            IF(LOWER(\"when\") LIKE 'after%', TRUE, FALSE) AS after_close,
             -- Create period labels
             CONCAT(EXTRACT(YEAR FROM date - INTERVAL 63 DAY), '-Q', EXTRACT(QUARTER FROM date - INTERVAL 63 DAY)) AS period_label,
             -- Calculate period_end_date as the last day of the quarter
@@ -1498,7 +1504,14 @@ get_earnings_calendar <- function(db_con) {
   return(earnings_calendar)
 }
 
-# get earnings estimates
+#' Get earnings estimates
+#' @description Retrieves earnings estimates with period labels and end dates.
+#' @param db_con A DBI connection object.
+#' @param symbol A character vector of symbols to filter by.
+#' @param start_date A character string representing the start date for filtering.
+#' @param end_date A character string representing the end date for filtering.
+#' @return A data frame with earnings estimates information.
+#' @export
 get_eps_estimates <- function(
   db_con,
   symbol = NULL,
@@ -1508,6 +1521,25 @@ get_eps_estimates <- function(
   # 1. Validation using your existing connection checker
   if (!is_valid_db_connection(db_con)) {
     stop("db_con must be a valid DBI connection.")
+  }
+
+  # Validate symbol
+  if (!is.null(symbol)) {
+    if (!is.character(symbol)) {
+      symbol <- as.character(symbol)
+    }
+    if (length(symbol) == 0) {
+      symbol <- NULL
+    }
+    if (any(is.na(symbol))) stop("symbol contains NA values.")
+  }
+
+  # Validate dates
+  if (!is.null(start_date) && is.na(as.Date(start_date, format = "%Y-%m-%d"))) {
+    stop("start_date must be a valid date string (YYYY-MM-DD).")
+  }
+  if (!is.null(end_date) && is.na(as.Date(end_date, format = "%Y-%m-%d"))) {
+    stop("end_date must be a valid date string (YYYY-MM-DD).")
   }
 
   # Base SQL query
@@ -1541,6 +1573,8 @@ get_eps_estimates <- function(
     sql_query <- paste0(sql_query, " AND period_end_date <= '", end_date, "'")
   }
   if (!is.null(symbol)) {
+    # Ensure symbol is a character vector
+    symbol <- as.character(symbol)
     sql_query <- paste0(
       sql_query,
       " AND act_symbol IN ('",
@@ -1587,13 +1621,41 @@ get_eps_estimates <- function(
   )
 
   # Execute the query
-  eps_estimates <- dbGetQuery(db_con, sql_query) %>%
-    distinct()
+  eps_estimates <- tryCatch(
+    {
+      dbGetQuery(db_con, sql_query) %>% distinct()
+    },
+    error = function(e) {
+      # Return empty data frame with expected columns if query fails
+      data.frame(
+        act_symbol = character(),
+        period_end_date = as.Date(character()),
+        period = character(),
+        estimation_date = as.Date(character()),
+        eps_estimated_consensus = numeric(),
+        eps_estimated_count = integer(),
+        eps_estimated_high = numeric(),
+        eps_estimated_low = numeric(),
+        eps_year_ago = numeric(),
+        period_label = character(),
+        eps_consensus_grew = logical(),
+        eps_consensus_reduced = logical(),
+        stringsAsFactors = FALSE
+      )
+    }
+  )
 
   return(eps_estimates)
 }
 
-# get earnings history
+#' Get earnings history
+#' @description Retrieves earnings history with period labels and end dates.
+#' @param db_con A DBI connection object.
+#' @param symbol A character vector of symbols to filter by.
+#' @param start_date A character string representing the start date for filtering.
+#' @param end_date A character string representing the end date for filtering.
+#' @return A data frame with earnings history information.
+#' @export
 get_eps_history <- function(
   db_con,
   symbol = NULL,
@@ -1603,6 +1665,24 @@ get_eps_history <- function(
   # 1. Validation using your existing connection checker
   if (!is_valid_db_connection(db_con)) {
     stop("db_con must be a valid DBI connection.")
+  }
+  # Validate symbol
+  if (!is.null(symbol)) {
+    if (!is.character(symbol)) {
+      symbol <- as.character(symbol)
+    }
+    if (length(symbol) == 0) {
+      symbol <- NULL
+    }
+    if (any(is.na(symbol))) stop("symbol contains NA values.")
+  }
+
+  # Validate dates
+  if (!is.null(start_date) && is.na(as.Date(start_date, format = "%Y-%m-%d"))) {
+    stop("start_date must be a valid date string (YYYY-MM-DD).")
+  }
+  if (!is.null(end_date) && is.na(as.Date(end_date, format = "%Y-%m-%d"))) {
+    stop("end_date must be a valid date string (YYYY-MM-DD).")
   }
 
   # Base SQL query
@@ -1658,58 +1738,86 @@ get_eps_history <- function(
   )
 
   # Execute the query
-  eps_history <- dbGetQuery(db_con, sql_query) %>%
-    distinct()
+  tryCatch(
+    {
+      eps_history <- dbGetQuery(db_con, sql_query) %>%
+        distinct()
 
-  eps_history <- eps_history %>%
-    rename(symbol = act_symbol) %>%
-    group_by(symbol) %>%
-    arrange(period_end_date) %>%
-    mutate(
-      # Handle division by zero in surprise calculations
-      surprise_amount = eps_reported - eps_estimated,
-      surprise_percent = ifelse(
-        abs(eps_estimated) < 1e-10,
-        NA_real_,
-        (eps_reported - eps_estimated) / abs(eps_estimated) * 100
-      ),
+      eps_history <- eps_history %>%
+        rename(symbol = act_symbol) %>%
+        group_by(symbol) %>%
+        arrange(period_end_date) %>%
+        mutate(
+          # Handle division by zero in surprise calculations
+          surprise_amount = eps_reported - eps_estimated,
+          surprise_percent = ifelse(
+            abs(eps_estimated) < 1e-10,
+            NA_real_,
+            (eps_reported - eps_estimated) / abs(eps_estimated) * 100
+          ),
 
-      # Growth calculations with NA handling
-      yoy_growth = ifelse(
-        abs(lag(eps_reported, 4)) < 1e-10 | is.na(lag(eps_reported, 4)),
-        NA_real_,
-        (eps_reported - lag(eps_reported, 4)) / abs(lag(eps_reported, 4)) * 100
-      ),
+          # Growth calculations with NA handling
+          yoy_growth = ifelse(
+            abs(lag(eps_reported, 4)) < 1e-10 | is.na(lag(eps_reported, 4)),
+            NA_real_,
+            (eps_reported - lag(eps_reported, 4)) /
+              abs(lag(eps_reported, 4)) *
+              100
+          ),
 
-      sequential_growth = ifelse(
-        abs(lag(eps_reported)) < 1e-10 | is.na(lag(eps_reported)),
-        NA_real_,
-        (eps_reported - lag(eps_reported)) / abs(lag(eps_reported)) * 100
-      ),
-      # Robust consecutive beats calculation
-      beat = ifelse(
-        is.na(eps_reported) | is.na(eps_estimated),
-        FALSE,
-        eps_reported > eps_estimated
-      ),
-      run_length = sequence(rle(beat)$lengths),
-      consecutive_beats = ifelse(beat, run_length, 0),
+          sequential_growth = ifelse(
+            abs(lag(eps_reported)) < 1e-10 | is.na(lag(eps_reported)),
+            NA_real_,
+            (eps_reported - lag(eps_reported)) / abs(lag(eps_reported)) * 100
+          ),
+          # Robust consecutive beats calculation
+          beat = ifelse(
+            is.na(eps_reported) | is.na(eps_estimated),
+            FALSE,
+            eps_reported > eps_estimated
+          ),
+          run_length = sequence(rle(beat)$lengths),
+          consecutive_beats = ifelse(beat, run_length, 0),
 
-      # Consistent consecutive growth calculation
-      positive_growth = ifelse(
-        is.na(sequential_growth),
-        FALSE,
-        sequential_growth > 0 & !is.infinite(sequential_growth)
-      ),
-      growth_run_length = sequence(rle(positive_growth)$lengths),
-      consecutive_growth = ifelse(positive_growth, growth_run_length, 0)
-    ) %>%
-    select(-beat, -run_length, -positive_growth, -growth_run_length) # Clean up temp columns
+          # Consistent consecutive growth calculation
+          positive_growth = ifelse(
+            is.na(sequential_growth),
+            FALSE,
+            sequential_growth > 0 & !is.infinite(sequential_growth)
+          ),
+          growth_run_length = sequence(rle(positive_growth)$lengths),
+          consecutive_growth = ifelse(positive_growth, growth_run_length, 0)
+        ) %>%
+        select(-beat, -run_length, -positive_growth, -growth_run_length) # Clean up temp columns
+    },
+    error = function(e) {
+      eps_history <- data.frame(
+        symbol = character(),
+        period_label = character(),
+        period_end_date = as.Date(character()),
+        eps_reported = numeric(),
+        eps_estimated = numeric(),
+        surprise_amount = numeric(),
+        surprise_percent = numeric(),
+        yoy_growth = numeric(),
+        sequential_growth = numeric(),
+        consecutive_beats = integer(),
+        consecutive_growth = integer(),
+        stringsAsFactors = FALSE
+      )
+    }
+  )
 
   return(eps_history)
 }
 
-# get the earnings history for a specific symbol
+
+#' Get the earnings history for a specific symbol
+#' @description Retrieves earnings history for a specific symbol.
+#' @param db_con A DBI connection object.
+#' @param symbols_price_data A data frame containing symbols to filter by.
+#' @return A data frame with earnings history information.
+#' @export
 get_eps_data <- function(
   db_con,
   symbols_price_data
@@ -1720,26 +1828,54 @@ get_eps_data <- function(
     stop("db_con must be a valid DBI connection.")
   }
 
-  symbol <- symbols_price_data$symbol %>%
-    unique()
+  # Validate input
+  if (!("symbol" %in% names(symbols_price_data))) {
+    stop("symbols_price_data must contain a 'symbol' column.")
+  }
+  symbol <- unique(symbols_price_data$symbol)
+  if (length(symbol) == 0) {
+    # Return empty data frame with expected columns
+    return(symbols_price_data[0, , drop = FALSE])
+  }
 
-  # load both data
-  earnings_calendar <- get_earnings_calendar(db_con) %>%
-    filter(symbol %in% symbol) %>%
-    mutate(
-      open_time = case_when(
-        before_open ~ date, # AM earnings affect same day
-        after_close ~ date + 1, # PM earnings affect next day
-        TRUE ~ date + 1 # Default to conservative
-      )
-    ) %>%
-    select(-date)
+  # Load both data
+  earnings_calendar <- tryCatch(
+    {
+      get_earnings_calendar(db_con) %>%
+        filter(symbol %in% symbol) %>%
+        mutate(
+          open_time = dplyr::case_when(
+            before_open ~ date, # AM earnings affect same day
+            after_close ~ date + 1, # PM earnings affect next day
+            TRUE ~ date + 1 # Default to conservative
+          )
+        ) %>%
+        select(-date)
+    },
+    error = function(e) {
+      tibble::tibble(symbol = character(), open_time = as.Date(character()))
+    }
+  )
 
-  eps_history <- get_eps_history(db_con, symbol) %>%
-    select(-period_end_date) %>%
-    filter(symbol %in% symbol)
+  eps_history <- tryCatch(
+    {
+      get_eps_history(db_con, symbol) %>%
+        select(-period_end_date) %>%
+        filter(symbol %in% symbol)
+    },
+    error = function(e) {
+      tibble::tibble(symbol = character())
+    }
+  )
 
-  eps_estimates <- get_eps_estimates(db_con, symbol)
+  eps_estimates <- tryCatch(
+    {
+      get_eps_estimates(db_con, symbol)
+    },
+    error = function(e) {
+      tibble::tibble(act_symbol = character(), period_label = character())
+    }
+  )
 
   eps_estimates_quarters <- eps_estimates %>%
     filter(grepl("Q", period_label))
@@ -1768,61 +1904,119 @@ get_eps_data <- function(
   return(new_data)
 }
 
-# Fix specific problematic columns in existing data
+#' Fix specific problematic columns in existing data
+#' @description Handles infinite values in financial data by applying winsorization.
+#' @param eps_data A data frame containing EPS data.
+#' @return A data frame with infinite values replaced by specified limits.
+#' @export
 fix_financial_infinities <- function(eps_data) {
   # Define winsorization limits - adjust these based on your data distribution
   upper_limit <- 1000 # Cap very large positive values (e.g., 1000%)
   lower_limit <- -1000 # Cap very large negative values
 
-  eps_data %>%
-    mutate(
-      # Handle consensus_change_percent - Winsorize extreme values
-      consensus_change_percent = case_when(
-        is.infinite(consensus_change_percent) & consensus_change_percent > 0 ~
-          upper_limit,
-        is.infinite(consensus_change_percent) & consensus_change_percent < 0 ~
-          lower_limit,
-        !is.infinite(consensus_change_percent) ~ consensus_change_percent
-      ),
+  cols_to_fix <- c(
+    "consensus_change_percent",
+    "dispersion_ratio",
+    "surprise_to_dispersion",
+    "high_uncertainty_surprise"
+  )
 
-      # Handle dispersion_ratio - Typically non-negative, cap at reasonable maximum
-      dispersion_ratio = case_when(
-        is.infinite(dispersion_ratio) ~ 10, # Cap at 10 (extremely high dispersion)
-        !is.infinite(dispersion_ratio) ~ dispersion_ratio
-      ),
-
-      # Handle surprise_to_dispersion - Can be positive or negative
-      surprise_to_dispersion = case_when(
-        is.infinite(surprise_to_dispersion) & surprise_to_dispersion > 0 ~
-          upper_limit,
-        is.infinite(surprise_to_dispersion) & surprise_to_dispersion < 0 ~
-          lower_limit,
-        !is.infinite(surprise_to_dispersion) ~ surprise_to_dispersion
-      ),
-
-      # Handle high_uncertainty_surprise - Typically non-negative
-      high_uncertainty_surprise = case_when(
-        is.infinite(high_uncertainty_surprise) ~ upper_limit,
-        !is.infinite(high_uncertainty_surprise) ~ high_uncertainty_surprise
-      )
-    )
+  for (col in cols_to_fix) {
+    if (col %in% names(eps_data)) {
+      # Only process if column is numeric
+      if (is.numeric(eps_data[[col]])) {
+        # Handle consensus_change_percent - Winsorize extreme values
+        if (col == "consensus_change_percent") {
+          eps_data[[col]] <- dplyr::case_when(
+            is.infinite(eps_data[[col]]) & eps_data[[col]] > 0 ~ upper_limit,
+            is.infinite(eps_data[[col]]) & eps_data[[col]] < 0 ~ lower_limit,
+            TRUE ~ eps_data[[col]]
+          )
+          # Handle dispersion_ratio - Typically non-negative, cap at reasonable maximum
+        } else if (col == "dispersion_ratio") {
+          eps_data[[col]] <- dplyr::case_when(
+            is.infinite(eps_data[[col]]) ~ 10,
+            TRUE ~ eps_data[[col]]
+          )
+          # Handle surprise_to_dispersion - Can be positive or negative, cap at reasonable limits
+        } else if (col == "surprise_to_dispersion") {
+          eps_data[[col]] <- dplyr::case_when(
+            is.infinite(eps_data[[col]]) & eps_data[[col]] > 0 ~ upper_limit,
+            is.infinite(eps_data[[col]]) & eps_data[[col]] < 0 ~ lower_limit,
+            TRUE ~ eps_data[[col]]
+          )
+          # Handle high_uncertainty_surprise - Typically non-negative, cap at reasonable maximum
+        } else if (col == "high_uncertainty_surprise") {
+          eps_data[[col]] <- dplyr::case_when(
+            is.infinite(eps_data[[col]]) ~ upper_limit,
+            TRUE ~ eps_data[[col]]
+          )
+        }
+      }
+    }
+  }
+  return(eps_data)
 }
 
-# Function to join everything
+#' Create earnings features
+#' @description Joins earnings data, consensus estimates, and price data to create features for analysis.
+#' @param symbols_price_data A data frame containing price data for symbols.
+#' @param earnings_calendar A data frame containing earnings calendar information.
+#' @param eps_history A data frame containing earnings history information.
+#' @param eps_estimates_quarters A data frame containing quarterly earnings estimates.
+#' @return A data frame with earnings features.
+#' @export
 create_earnings_features <- function(
   symbols_price_data,
   earnings_calendar,
   eps_history,
   eps_estimates_quarters
-  # fake_Q3_2019 = NULL
 ) {
+  # Check for required columns in each input
+  required_price_cols <- c("symbol", "open_time")
+  required_calendar_cols <- c("symbol", "period_label", "open_time")
+  required_history_cols <- c(
+    "symbol",
+    "period_label",
+    "eps_reported",
+    "eps_estimated"
+  )
+  required_estimate_cols <- c(
+    "act_symbol",
+    "period_label",
+    "estimation_date",
+    "eps_estimated_consensus",
+    "eps_estimated_high",
+    "eps_estimated_low"
+  )
+
+  for (col in required_price_cols) {
+    if (!col %in% names(symbols_price_data)) {
+      stop("symbols_price_data missing column: ", col)
+    }
+  }
+  for (col in required_calendar_cols) {
+    if (!col %in% names(earnings_calendar)) {
+      stop("earnings_calendar missing column: ", col)
+    }
+  }
+  for (col in required_history_cols) {
+    if (!col %in% names(eps_history)) stop("eps_history missing column: ", col)
+  }
+  for (col in required_estimate_cols) {
+    if (!col %in% names(eps_estimates_quarters)) {
+      stop("eps_estimates_quarters missing column: ", col)
+    }
+  }
+
+  # Early return if price data is empty
+  if (nrow(symbols_price_data) == 0) {
+    return(symbols_price_data)
+  }
+
   # 1. Process earnings data
   eps_data <- earnings_calendar %>%
     left_join(eps_history, by = c("symbol", "period_label")) %>%
-    # rename(open_time = date) %>%
-    # {
-    #   if (!is.null(fake_Q3_2019)) bind_rows(., fake_Q3_2019) else .
-    # } %>%
     mutate(is_earning_day = TRUE) %>%
     arrange(symbol, open_time)
 
@@ -2024,24 +2218,22 @@ create_earnings_features <- function(
   return(result)
 }
 
-# get the xgb model as an indicator
-get_xgb_indicator <- function(model_labels) {
-  # Connect to the model database
-  db_name <- "models_data.duckdb"
-  # check if I'm running in windows or linux
-  if (.Platform$OS.type == "windows") {
-    db_path <- file.path("Z:/stock_data", db_name)
-  } else {
-    db_path <- file.path("/mnt/nas_nuvens/stock_data", db_name)
+#' Get the xgb model as an indicator
+#'
+#' @description Retrieves the xgb model predictions as an indicator for the specified model labels.
+#' @param model_conn A DBI connection object to the database containing the xgb_indicator
+#' @param model_labels A character vector of model labels to filter the xgb_indicator data.
+#' @return A data frame with xgb indicator information for the specified model labels.
+#' @export
+get_xgb_indicator <- function(model_conn, model_labels) {
+  # Validate the connection
+  if (!is_valid_db_connection(model_conn)) {
+    stop("model_conn must be a valid DBI connection.")
   }
-
-  # Database db_con
-  model_conn <- dbConnect(
-    duckdb(),
-    dbdir = db_path,
-    read_only = FALSE
-  )
-
+  # Validate model_labels
+  if (!is.character(model_labels) || length(model_labels) == 0) {
+    stop("model_labels must be a non-empty character vector.")
+  }
   model_labels <- paste0("'", model_labels, "'", collapse = ", ")
 
   # Query the data
@@ -2056,14 +2248,18 @@ get_xgb_indicator <- function(model_labels) {
   # load the data
   xgb_indicator <- dbGetQuery(model_conn, sql_query)
 
-  # disconnect from the model database
-  dbDisconnect(model_conn)
-
   return(xgb_indicator)
 }
 
-
-# Check the high before the low for TP ans SL filters
+#' Check the high before the low for TP and SL filters
+#'
+#' @description Checks if the high threshold is reached before the low threshold within a specified period.
+#' @param price_data A data frame containing price data with columns: symbol, open_time, high, low, close.
+#' @param high_threshold Numeric value representing the high threshold percentage.
+#' @param low_threshold Numeric value representing the low threshold percentage.
+#' @param max_period Integer specifying the maximum period to look ahead.
+#' @return A data frame with an additional column indicating if the high threshold was reached before the low threshold.
+#' @export
 check_high_before_low <- function(
   price_data,
   high_threshold = 3,
@@ -2140,8 +2336,15 @@ check_high_before_low <- function(
 }
 
 
-# Function to get benchmarks indicators
-# This function loads and processes external market indexes data to use as benchmarks
+#' Function to get benchmarks indicators
+#' @description Loads and processes external market indexes data to use as benchmarks.
+#' @param db_con A DBI connection object to the database containing the benchmark data.
+#' @param timeframe A character string specifying the timeframe ("1d" or "1h").
+#' @param start_date A character string specifying the start date for the data (optional).
+#' @param end_date A character string specifying the end date for the data (optional).
+#' @param symbols A character vector of symbols to filter the benchmark data (optional).
+#' @return A data frame with the processed benchmark data.
+#' @export
 get_external_indexes <- function(
   db_con,
   timeframe = "1d",
@@ -2164,24 +2367,10 @@ get_external_indexes <- function(
 
   # If no symbol is provided, fetch all external market indexes
   if (is.null(symbols)) {
-    symbols <- c(
-      "^GSPC",
-      "^DJI",
-      "^IXIC",
-      "VT",
-      "^TNX",
-      "LQD",
-      "BNDW",
-      "GC=F",
-      "GSG",
-      "^VIX",
-      "DX-Y.NYB",
-      "BTC-USD",
-      "VNQ",
-      "TIP",
-      "HYG",
-      "JNK"
-    )
+    # query the benchmarks table
+    symbols <- DBI::dbReadTable(db_con, "benchmark_symbols") %>%
+      pull(symbol) %>%
+      unique()
   }
 
   # Prepare the list of symbols for the SQL query

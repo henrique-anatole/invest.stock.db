@@ -13,6 +13,9 @@ get_price_moves(db_con, timeframe = "1d", periods = c(1, 5, 10))
 
 \item{periods}{Numeric vector of forward-looking windows (e.g., c(1, 5, 10)).}
 }
+\value{
+A data frame with target_max_rise_X, target_max_drop_X, and target_net_change_X for each period.
+}
 \description{
 Calculates future max rise, max drop, and net change for specified windows.
 }
