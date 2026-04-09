@@ -224,10 +224,9 @@ test_that("add_indicators - first set", {
   )
   # No column stochastic_k should be present
   expect_false(any(grepl("stochastic_k", names(result))))
-  expect_false(any(grepl("roc", names(result))))
+  expect_false(any(grepl("roc|ker", names(result))))
   expect_false(any(grepl("force_index", names(result))))
-  expect_false(any(grepl("vol_sma", names(result))))
-  expect_false(any(grepl("vol_rel", names(result))))
+  expect_false(any(grepl("vol_rel|obv|vwap", names(result))))
 
   indicators <- c(
     "stochastic_k",
@@ -243,13 +242,33 @@ test_that("add_indicators - first set", {
   )
   # No column rsi should be present
   expect_false(any(grepl("rsi", names(result))))
+  expect_false(any(grepl("momentum|ker", names(result))))
+  expect_false(any(grepl("rsi_volume", names(result))))
+  expect_false(any(grepl("vol_sma|obv|vwap", names(result))))
 
   indicators <- c(
     "ker",
     "obv"
   )
 
+  result <- add_indicators(
+    prepared_data = prepared_data,
+    indicators = indicators,
+    db_con = temp_con
+  )
+
+  expect_false(any(grepl("momentum|roc", names(result))))
+  expect_false(any(grepl("vol_sma|volume_relative|vwap", names(result))))
+
   indicators <- c(
     "vwap"
   )
+
+  result <- add_indicators(
+    prepared_data = prepared_data,
+    indicators = indicators,
+    db_con = temp_con
+  )
+
+  expect_false(any(grepl("vol_sma|volume_relative|obv", names(result))))
 })
