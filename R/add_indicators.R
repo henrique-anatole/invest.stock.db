@@ -1,6 +1,6 @@
 #' Orchestrate Indicator Addition
 #' @description Merges price data with technical indicators, fundamental data, and model predictions.
-#' @param all_symbol_data Dataframe containing 'symbol' and 'open_time'.
+#' @param prepared_data Dataframe containing 'symbol' and 'open_time'.
 #' @param indicators Character vector of requested indicator names.
 #' @param model_labels Optional labels for XGBoost model fetching.
 #' @param target_condition List containing success/failure thresholds.
@@ -8,14 +8,13 @@
 #' @return A consolidated dataframe with all requested features.
 #' @export
 add_indicators <- function(
-  all_symbol_data,
+  prepared_data,
   indicators,
   model_labels = NULL,
   target_condition = NULL,
   db_con
 ) {
   # Join all data and create features for all symbols at once
-  prepared_data <- all_symbol_data
   indicators <- tolower(indicators)
   # Check for the indicators that were passed and add them to the prepared data
   # smas
@@ -89,32 +88,31 @@ add_indicators <- function(
   }
   # pivots
   if (any(grepl("pivots", indicators))) {
-    pivots <- get_pivots(db_con, weekly = TRUE, fib = FALSE, round = FALSE)
+    pivots <- get_pivots(db_con, weekly = TRUE, fib = FALSE)
     prepared_data <- prepared_data %>%
       left_join(pivots, by = c("symbol", "open_time"))
   }
   # RSI
-  if (any(grepl("rsi", indicators))) {
+  if (any(grepl("rsi|stochastic_k", indicators))) {
     # load Oscillators if not already loaded
     if (!exists("oscillators")) {
       oscillators <- get_oscillators(db_con, timeframe = "1d", period = 14)
     }
     prepared_data <- prepared_data %>%
-      left_join(oscillators, by = c("symbol", "open_time")) %>%
-      select(-stochastic_k)
-  }
-  # stochastic_k
-  if (any(grepl("stochastic_k", indicators))) {
-    # load Oscillators if not already loaded
-    if (!exists("oscillators")) {
-      oscillators <- get_oscillators(db_con, timeframe = "1d", period = 14)
+      left_join(oscillators, by = c("symbol", "open_time"))
+    # remove the columns not requested
+    non_requested_cols <- c(
+      "rsi",
+      "stochastic_k"
+    )[!c("rsi", "stochastic_k") %in% indicators]
+    if (length(non_requested_cols) > 0) {
+      prepared_data <- prepared_data %>%
+        select(-all_of(non_requested_cols))
     }
-    prepared_data <- prepared_data %>%
-      left_join(oscillators, by = c("symbol", "open_time")) %>%
-      select(-rsi)
   }
+
   # momentum
-  if (any(grepl("momentum", indicators))) {
+  if (any(grepl("momentum|roc|ker", indicators))) {
     # load Trend Followers if not already loaded
     if (!exists("trend_followers")) {
       trend_followers <- get_trend_followers(
@@ -124,39 +122,20 @@ add_indicators <- function(
       )
     }
     prepared_data <- prepared_data %>%
-      left_join(trend_followers, by = c("symbol", "open_time")) %>%
-      select(-roc, -ker)
-  }
-  # ROC
-  if (any(grepl("roc", indicators))) {
-    # load Trend Followers if not already loaded
-    if (!exists("trend_followers")) {
-      trend_followers <- get_trend_followers(
-        db_con,
-        timeframe = "1d",
-        period = 14
-      )
+      left_join(trend_followers, by = c("symbol", "open_time"))
+    # remove the columns not requested
+    non_requested_cols <- c(
+      "momentum",
+      "roc",
+      "ker"
+    )[!c("momentum", "roc", "ker") %in% indicators]
+    if (length(non_requested_cols) > 0) {
+      prepared_data <- prepared_data %>%
+        select(-all_of(non_requested_cols))
     }
-    prepared_data <- prepared_data %>%
-      left_join(trend_followers, by = c("symbol", "open_time")) %>%
-      select(-momentum, -ker)
-  }
-  # KER
-  if (any(grepl("ker", indicators))) {
-    # load Trend Followers if not already loaded
-    if (!exists("trend_followers")) {
-      trend_followers <- get_trend_followers(
-        db_con,
-        timeframe = "1d",
-        period = 14
-      )
-    }
-    prepared_data <- prepared_data %>%
-      left_join(trend_followers, by = c("symbol", "open_time")) %>%
-      select(-momentum, -roc)
   }
   # RSI_Volume
-  if (any(grepl("rsi_volume", indicators))) {
+  if (any(grepl("rsi_volume|force_index", indicators))) {
     # load Volume Oscillators if not already loaded
     if (!exists("volume_oscillators")) {
       volume_oscillators <- get_vol_oscillators(
@@ -167,26 +146,19 @@ add_indicators <- function(
       )
     }
     prepared_data <- prepared_data %>%
-      left_join(volume_oscillators, by = c("symbol", "open_time")) %>%
-      select(-force_index)
-  }
-  # Force_Index
-  if (any(grepl("force_index", indicators))) {
-    # load Volume Oscillators if not already loaded
-    if (!exists("volume_oscillators")) {
-      volume_oscillators <- get_vol_oscillators(
-        db_con,
-        timeframe = "1d",
-        rsi_period = 14,
-        force_index_smoothing = 13
-      )
+      left_join(volume_oscillators, by = c("symbol", "open_time"))
+    # remove the columns not requested
+    non_requested_cols <- c(
+      "rsi_volume",
+      "force_index"
+    )[!c("rsi_volume", "force_index") %in% indicators]
+    if (length(non_requested_cols) > 0) {
+      prepared_data <- prepared_data %>%
+        select(-all_of(non_requested_cols))
     }
-    prepared_data <- prepared_data %>%
-      left_join(volume_oscillators, by = c("symbol", "open_time")) %>%
-      select(-rsi_volume)
   }
   # vol_sma
-  if (any(grepl("vol_sma", indicators))) {
+  if (any(grepl("vol_sma|volume_relative|obv|vwap", indicators))) {
     vol_sma <- get_vol_averages(
       db_con,
       timeframe = "1d",
@@ -194,36 +166,24 @@ add_indicators <- function(
     )
     prepared_data <- prepared_data %>%
       left_join(vol_sma, by = c("symbol", "open_time"))
-  }
-  # obv
-  if (any(grepl("obv", indicators))) {
-    obv <- get_vol_averages(
-      db_con,
-      timeframe = "1d",
-      periods = c(20, 50, 150, 200)
+    # remove the columns not requested
+    cols_per_indicator <- list(
+      vol_sma = paste0("vol_sma_", c(20, 50, 150, 200)),
+      volume_relative = paste0("vol_rel_", c(20, 50, 150, 200)),
+      obv = "anchored_obv",
+      vwap = "anchored_vwap"
     )
-    prepared_data <- prepared_data %>%
-      left_join(obv, by = c("symbol", "open_time"))
-  }
-  # volume_relative
-  if (any(grepl("volume_relative", indicators))) {
-    volume_relative <- get_vol_averages(
-      db_con,
-      timeframe = "1d",
-      periods = c(20, 50, 150, 200)
-    )
-    prepared_data <- prepared_data %>%
-      left_join(volume_relative, by = c("symbol", "open_time"))
-  }
-  # vwap
-  if (any(grepl("vwap", indicators))) {
-    vwap <- get_vol_averages(
-      db_con,
-      timeframe = "1d",
-      periods = c(20, 50, 150, 200)
-    )
-    prepared_data <- prepared_data %>%
-      left_join(vwap, by = c("symbol", "open_time"))
+    non_requested_cols <- c(
+      "vol_sma",
+      "volume_relative",
+      "obv",
+      "vwap"
+    )[!c("vol_sma", "volume_relative", "obv", "vwap") %in% indicators]
+    if (length(non_requested_cols) > 0) {
+      cols_to_remove <- unlist(cols_per_indicator[non_requested_cols])
+      prepared_data <- prepared_data %>%
+        select(-all_of(cols_to_remove))
+    }
   }
   # keltner_bands
   if (any(grepl("keltner_bands", indicators))) {
@@ -321,7 +281,10 @@ add_indicators <- function(
   # week and month days
   if (any(grepl("calendar", indicators))) {
     prepared_data <- prepared_data %>%
-      mutate(weekday = wday(open_time), day_of_month = day(open_time))
+      mutate(
+        weekday = lubridate::wday(open_time),
+        day_of_month = lubridate::day(open_time)
+      )
   }
   # Load price moves
   price_moves <- get_price_moves(db_con)

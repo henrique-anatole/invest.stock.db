@@ -168,12 +168,12 @@ get_bollinger_bands <- function(db_con, timeframe = "1d", period = 20) {
     win,
     " AS SMA_",
     period,
-    ",
+    "BB ,
       STDDEV_POP(close) ",
     win,
     " AS STDDEV_",
     period,
-    ",
+    "BB ,
       -- Bands
       (AVG(close) ",
     win,
@@ -291,13 +291,13 @@ get_macd <- function(
         percent = percent
       ),
       macd = macd_mat[, 1],
-      signal_line = macd_mat[, 2],
-      macd_histogram = macd - signal_line,
+      macd_signal = macd_mat[, 2],
+      macd_histogram = macd - macd_signal,
       macd_direction = if_else(macd_histogram > 0, 1, 0)
     ) %>%
     select(-macd_mat, -clean_close) %>% # Clean up temp columns
     ungroup() %>%
-    filter(!is.na(signal_line))
+    filter(!is.na(macd_signal)) # Remove rows where MACD couldn't be calculated
 
   return(timeseries)
 }
@@ -521,21 +521,21 @@ get_pivots <- function(db_con, weekly = TRUE, fib = FALSE) {
   if (fib) {
     # Fibonacci Levels: Pivot +/- Range * Ratios
     math_levels <- "
-      pivt + (prev_h - prev_l) * 0.382 AS r1, 
-      pivt + (prev_h - prev_l) * 0.618 AS r2, 
-      pivt + (prev_h - prev_l) * 1.000 AS r3,
-      pivt - (prev_h - prev_l) * 0.382 AS s1, 
-      pivt - (prev_h - prev_l) * 0.618 AS s2, 
-      pivt - (prev_h - prev_l) * 1.000 AS s3"
+      pivot_line + (prev_h - prev_l) * 0.382 AS r1, 
+      pivot_line + (prev_h - prev_l) * 0.618 AS r2, 
+      pivot_line + (prev_h - prev_l) * 1.000 AS r3,
+      pivot_line - (prev_h - prev_l) * 0.382 AS s1, 
+      pivot_line - (prev_h - prev_l) * 0.618 AS s2, 
+      pivot_line - (prev_h - prev_l) * 1.000 AS s3"
   } else {
     # Standard Floor Levels
     math_levels <- "
-      (2 * pivt) - prev_l AS r1, 
-      pivt + (prev_h - prev_l) AS r2, 
-      prev_h + 2 * (pivt - prev_l) AS r3,
-      (2 * pivt) - prev_h AS s1, 
-      pivt - (prev_h - prev_l) AS s2, 
-      prev_l - 2 * (prev_h - pivt) AS s3"
+      (2 * pivot_line) - prev_l AS r1, 
+      pivot_line + (prev_h - prev_l) AS r2, 
+      prev_h + 2 * (pivot_line - prev_l) AS r3,
+      (2 * pivot_line) - prev_h AS s1, 
+      pivot_line - (prev_h - prev_l) AS s2, 
+      prev_l - 2 * (prev_h - pivot_line) AS s3"
   }
 
   # 3. Select the Query Path
@@ -563,8 +563,8 @@ get_pivots <- function(db_con, weekly = TRUE, fib = FALSE) {
         FROM weekly_agg
       )
       SELECT 
-        d.symbol, d.open_time, d.high, d.low, d.close,
-        (prev_h + prev_l + prev_c) / 3 AS pivt,
+        d.symbol, d.open_time, 
+        (prev_h + prev_l + prev_c) / 3 AS pivot_line,
         prev_h AS swing_high,
         ",
       math_levels,
@@ -573,7 +573,7 @@ get_pivots <- function(db_con, weekly = TRUE, fib = FALSE) {
       LEFT JOIN weekly_pivots w 
         ON d.symbol = w.symbol 
         AND DATE_TRUNC('week', d.open_time) = w.week_start
-      WHERE pivt IS NOT NULL
+      WHERE pivot_line IS NOT NULL
       ORDER BY d.symbol, d.open_time
     "
     )
@@ -590,14 +590,14 @@ get_pivots <- function(db_con, weekly = TRUE, fib = FALSE) {
         FROM daily_prices
       )
       SELECT 
-        symbol, open_time, high, low, close,
-        (prev_h + prev_l + prev_c) / 3 AS pivt,
+        symbol, open_time, 
+        (prev_h + prev_l + prev_c) / 3 AS pivot_line,
         prev_h AS swing_high,
         ",
       math_levels,
       "
       FROM daily_pivots
-      WHERE pivt IS NOT NULL
+      WHERE pivot_line IS NOT NULL
       ORDER BY symbol, open_time
     "
     )
@@ -943,7 +943,7 @@ get_vol_averages <- function(
                 NULLIF(SUM(volume) OVER (PARTITION BY symbol, anchor_group ORDER BY open_time), 0) AS anchored_vwap
         FROM base_stats
     )
-    SELECT symbol, open_time, close, volume, anchored_vwap, anchored_obv"
+    SELECT symbol, open_time, anchored_vwap, anchored_obv"
   )
 
   # Part B: Add Dynamic Moving Averages (These do NOT reset; they provide historical context)
@@ -2034,7 +2034,7 @@ create_earnings_features <- function(
         100,
       estimate_range = eps_estimated_high - eps_estimated_low,
       dispersion_ratio = estimate_range / eps_estimated_consensus,
-      open_time = estimation_date + days(1) # Adjust open_time to the next day, since most estimates are released on weekends
+      open_time = estimation_date + lubridate::days(1) # Adjust open_time to the next day, since most estimates are released on weekends
     ) %>%
     ungroup() %>%
     select(-period_end_date)
@@ -2138,8 +2138,9 @@ create_earnings_features <- function(
       ),
 
       # Earnings seasonality features
-      quarter = quarter(open_time),
-      is_quarterly_earnings_season = month(open_time) %in% c(1, 4, 7, 10),
+      quarter = lubridate::quarter(open_time),
+      is_quarterly_earnings_season = lubridate::month(open_time) %in%
+        c(1, 4, 7, 10),
 
       # Standardized time features
       earnings_cycle_position = ifelse(
