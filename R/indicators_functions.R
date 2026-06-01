@@ -311,7 +311,7 @@ get_macd <- function(
 #' @param db_con A DBI connection object.
 #' @param timeframe Character ("1d" or "1h").
 #' @param periods Numeric vector of periods for Volatility and ATR.
-#' @return A data frame with volatility metrics for each specified period.
+#' @return A data frame with volatility metrics for each specified period, including intraday volatility, true range, and gap metrics.
 #' @export
 get_volatilities <- function(
   db_con,
@@ -1486,6 +1486,7 @@ get_earnings_calendar <- function(db_con) {
     "SELECT 
             act_symbol AS symbol,
             date,
+            TRUE as is_earning_day,
             IF(LOWER(\"when\") LIKE 'before%', TRUE, FALSE) AS before_open,
             IF(LOWER(\"when\") LIKE 'after%', TRUE, FALSE) AS after_close,
             -- Create period labels
@@ -1600,6 +1601,9 @@ get_eps_estimates <- function(
         period_end_date,
         period,
         estimation_date,
+        -- Adjust open_time to the next day, since most estimates are released on weekends
+        estimation_date + INTERVAL '1 day' AS open_time,
+        TRUE AS is_earning_estimation_day,
         eps_estimated_consensus,
         eps_estimated_count,
         eps_estimated_high,
@@ -1614,36 +1618,19 @@ get_eps_estimates <- function(
         CASE
             WHEN eps_estimated_consensus < previous_eps_estimated_consensus THEN TRUE
             ELSE FALSE
-        END AS eps_consensus_reduced
+        END AS eps_consensus_declined,
+        -- Calculate columns
+        eps_estimated_consensus - previous_eps_estimated_consensus AS eps_consensus_change,
+        eps_consensus_change / NULLIF(ABS(previous_eps_estimated_consensus), 0) * 100 AS eps_consensus_change_percent,
+        eps_estimated_high - eps_estimated_low AS eps_estimated_range,
+        eps_estimated_range / NULLIF(ABS(eps_estimated_consensus), 0) * 100 AS eps_estimated_range_percent
     FROM eps_comparison
     ORDER BY act_symbol, estimation_date, period_end_date;
   "
   )
 
   # Execute the query
-  eps_estimates <- tryCatch(
-    {
-      dbGetQuery(db_con, sql_query) %>% distinct()
-    },
-    error = function(e) {
-      # Return empty data frame with expected columns if query fails
-      data.frame(
-        act_symbol = character(),
-        period_end_date = as.Date(character()),
-        period = character(),
-        estimation_date = as.Date(character()),
-        eps_estimated_consensus = numeric(),
-        eps_estimated_count = integer(),
-        eps_estimated_high = numeric(),
-        eps_estimated_low = numeric(),
-        eps_year_ago = numeric(),
-        period_label = character(),
-        eps_consensus_grew = logical(),
-        eps_consensus_reduced = logical(),
-        stringsAsFactors = FALSE
-      )
-    }
-  )
+  eps_estimates <- dbGetQuery(db_con, sql_query) %>% distinct()
 
   return(eps_estimates)
 }
@@ -1731,6 +1718,8 @@ get_eps_history <- function(
         period_end_date,
         reported AS eps_reported,
         estimate AS eps_estimated,
+        previous_reported,
+        previous_estimate,
         period_label
     FROM eps_comparison
     ORDER BY act_symbol, period_end_date;
@@ -1738,75 +1727,55 @@ get_eps_history <- function(
   )
 
   # Execute the query
-  tryCatch(
-    {
-      eps_history <- dbGetQuery(db_con, sql_query) %>%
-        distinct()
+  eps_history <- dbGetQuery(db_con, sql_query) %>%
+    distinct()
 
-      eps_history <- eps_history %>%
-        rename(symbol = act_symbol) %>%
-        group_by(symbol) %>%
-        arrange(period_end_date) %>%
-        mutate(
-          # Handle division by zero in surprise calculations
-          surprise_amount = eps_reported - eps_estimated,
-          surprise_percent = ifelse(
-            abs(eps_estimated) < 1e-10,
-            NA_real_,
-            (eps_reported - eps_estimated) / abs(eps_estimated) * 100
-          ),
+  eps_history <- eps_history %>%
+    rename(symbol = act_symbol) %>%
+    group_by(symbol) %>%
+    arrange(period_end_date) %>%
+    mutate(
+      # Handle division by zero in surprise calculations
+      surprise_amount = eps_reported - eps_estimated,
+      surprise_percent = ifelse(
+        abs(eps_estimated) < 1e-10,
+        NA_real_,
+        (eps_reported - eps_estimated) / abs(eps_estimated) * 100
+      ),
 
-          # Growth calculations with NA handling
-          yoy_growth = ifelse(
-            abs(lag(eps_reported, 4)) < 1e-10 | is.na(lag(eps_reported, 4)),
-            NA_real_,
-            (eps_reported - lag(eps_reported, 4)) /
-              abs(lag(eps_reported, 4)) *
-              100
-          ),
+      # Growth calculations with NA handling
+      yoy_growth = ifelse(
+        abs(lag(eps_reported, 4)) < 1e-10 | is.na(lag(eps_reported, 4)),
+        NA_real_,
+        (eps_reported - lag(eps_reported, 4)) /
+          abs(lag(eps_reported, 4)) *
+          100
+      ),
 
-          sequential_growth = ifelse(
-            abs(lag(eps_reported)) < 1e-10 | is.na(lag(eps_reported)),
-            NA_real_,
-            (eps_reported - lag(eps_reported)) / abs(lag(eps_reported)) * 100
-          ),
-          # Robust consecutive beats calculation
-          beat = ifelse(
-            is.na(eps_reported) | is.na(eps_estimated),
-            FALSE,
-            eps_reported > eps_estimated
-          ),
-          run_length = sequence(rle(beat)$lengths),
-          consecutive_beats = ifelse(beat, run_length, 0),
+      sequential_growth = ifelse(
+        abs(lag(eps_reported)) < 1e-10 | is.na(lag(eps_reported)),
+        NA_real_,
+        (eps_reported - lag(eps_reported)) / abs(lag(eps_reported)) * 100
+      ),
+      # Robust consecutive beats calculation
+      beat = ifelse(
+        is.na(eps_reported) | is.na(eps_estimated),
+        FALSE,
+        eps_reported > eps_estimated
+      ),
+      run_length = sequence(rle(beat)$lengths),
+      consecutive_beats = ifelse(beat, run_length, 0),
 
-          # Consistent consecutive growth calculation
-          positive_growth = ifelse(
-            is.na(sequential_growth),
-            FALSE,
-            sequential_growth > 0 & !is.infinite(sequential_growth)
-          ),
-          growth_run_length = sequence(rle(positive_growth)$lengths),
-          consecutive_growth = ifelse(positive_growth, growth_run_length, 0)
-        ) %>%
-        select(-beat, -run_length, -positive_growth, -growth_run_length) # Clean up temp columns
-    },
-    error = function(e) {
-      eps_history <- data.frame(
-        symbol = character(),
-        period_label = character(),
-        period_end_date = as.Date(character()),
-        eps_reported = numeric(),
-        eps_estimated = numeric(),
-        surprise_amount = numeric(),
-        surprise_percent = numeric(),
-        yoy_growth = numeric(),
-        sequential_growth = numeric(),
-        consecutive_beats = integer(),
-        consecutive_growth = integer(),
-        stringsAsFactors = FALSE
-      )
-    }
-  )
+      # Consistent consecutive growth calculation
+      positive_growth = ifelse(
+        is.na(sequential_growth),
+        FALSE,
+        sequential_growth > 0 & !is.infinite(sequential_growth)
+      ),
+      growth_run_length = sequence(rle(positive_growth)$lengths),
+      consecutive_growth = ifelse(positive_growth, growth_run_length, 0)
+    ) %>%
+    select(-beat, -run_length, -positive_growth, -growth_run_length) # Clean up temp columns
 
   return(eps_history)
 }
@@ -1842,15 +1811,9 @@ get_eps_data <- function(
   earnings_calendar <- tryCatch(
     {
       get_earnings_calendar(db_con) %>%
-        filter(symbol %in% symbol) %>%
-        mutate(
-          open_time = dplyr::case_when(
-            before_open ~ date, # AM earnings affect same day
-            after_close ~ date + 1, # PM earnings affect next day
-            TRUE ~ date + 1 # Default to conservative
-          )
-        ) %>%
-        select(-date)
+        filter(symbol %in% symbol)
+      # %>%
+      # select(-date)
     },
     error = function(e) {
       tibble::tibble(symbol = character(), open_time = as.Date(character()))
@@ -1916,7 +1879,7 @@ fix_financial_infinities <- function(eps_data) {
 
   cols_to_fix <- c(
     "consensus_change_percent",
-    "dispersion_ratio",
+    "eps_estimated_range_percent",
     "surprise_to_dispersion",
     "high_uncertainty_surprise"
   )
@@ -1932,8 +1895,8 @@ fix_financial_infinities <- function(eps_data) {
             is.infinite(eps_data[[col]]) & eps_data[[col]] < 0 ~ lower_limit,
             TRUE ~ eps_data[[col]]
           )
-          # Handle dispersion_ratio - Typically non-negative, cap at reasonable maximum
-        } else if (col == "dispersion_ratio") {
+          # Handle eps_estimated_range_percent - Typically non-negative, cap at reasonable maximum
+        } else if (col == "eps_estimated_range_percent") {
           eps_data[[col]] <- dplyr::case_when(
             is.infinite(eps_data[[col]]) ~ 10,
             TRUE ~ eps_data[[col]]
@@ -1974,7 +1937,7 @@ create_earnings_features <- function(
 ) {
   # Check for required columns in each input
   required_price_cols <- c("symbol", "open_time")
-  required_calendar_cols <- c("symbol", "period_label", "open_time")
+  required_calendar_cols <- c("symbol", "period_label")
   required_history_cols <- c(
     "symbol",
     "period_label",
@@ -2017,7 +1980,13 @@ create_earnings_features <- function(
   # 1. Process earnings data
   eps_data <- earnings_calendar %>%
     left_join(eps_history, by = c("symbol", "period_label")) %>%
-    mutate(is_earning_day = TRUE) %>%
+    mutate(
+      open_time = dplyr::case_when(
+        before_open ~ date, # AM earnings affect same day
+        after_close ~ date + 1, # PM earnings affect next day
+        TRUE ~ date + 1 # Default to conservative
+      )
+    ) %>%
     arrange(symbol, open_time)
 
   # 2. Process consensus estimates
@@ -2026,16 +1995,15 @@ create_earnings_features <- function(
     rename(symbol = act_symbol) %>%
     group_by(symbol) %>%
     arrange(estimation_date) %>%
-    mutate(
-      is_estimation_day = TRUE,
-      consensus_change = eps_estimated_consensus - lag(eps_estimated_consensus),
-      consensus_change_percent = consensus_change /
-        lag(eps_estimated_consensus) *
-        100,
-      estimate_range = eps_estimated_high - eps_estimated_low,
-      dispersion_ratio = estimate_range / eps_estimated_consensus,
-      open_time = estimation_date + lubridate::days(1) # Adjust open_time to the next day, since most estimates are released on weekends
-    ) %>%
+    # mutate(
+    #   consensus_change = eps_estimated_consensus - lag(eps_estimated_consensus),
+    #   consensus_change_percent = consensus_change /
+    #     lag(eps_estimated_consensus) *
+    #     100,
+    #   eps_estimated_range_percent = eps_estimated_high - eps_estimated_low,
+    #   eps_estimated_range_percent = estimate_range / eps_estimated_consensus,
+    #   open_time = estimation_date + lubridate::days(1) # Adjust open_time to the next day, since most estimates are released on weekends
+    # ) %>%
     ungroup() %>%
     select(-period_end_date)
 
@@ -2066,7 +2034,11 @@ create_earnings_features <- function(
     mutate(
       # Set flags properly
       is_earning_day = ifelse(is.na(is_earning_day), FALSE, TRUE),
-      is_estimation_day = ifelse(is.na(is_estimation_day), FALSE, TRUE),
+      is_earning_estimation_day = ifelse(
+        is.na(is_earning_estimation_day),
+        FALSE,
+        TRUE
+      ),
       # Fill forward earnings data
       across(
         c(
@@ -2091,11 +2063,11 @@ create_earnings_features <- function(
           eps_estimated_low,
           eps_year_ago,
           eps_consensus_grew,
-          eps_consensus_reduced,
-          consensus_change,
-          consensus_change_percent,
-          estimate_range,
-          dispersion_ratio
+          eps_consensus_declined,
+          eps_consensus_change,
+          eps_consensus_change_percent,
+          eps_estimated_range,
+          eps_estimated_range_percent
         ),
         ~ zoo::na.locf(.x, na.rm = FALSE)
       ),
@@ -2152,13 +2124,14 @@ create_earnings_features <- function(
 
       # Create combined features between earnings and estimates
       surprise_to_dispersion = ifelse(
-        !is.na(surprise_percent) & !is.na(dispersion_ratio),
-        surprise_percent / dispersion_ratio,
+        !is.na(surprise_percent) & !is.na(eps_estimated_range_percent),
+        surprise_percent / eps_estimated_range_percent,
         NA
       ),
+
       high_uncertainty_surprise = ifelse(
-        !is.na(surprise_percent) & !is.na(dispersion_ratio),
-        abs(surprise_percent) * dispersion_ratio,
+        !is.na(surprise_percent) & !is.na(eps_estimated_range_percent),
+        abs(surprise_percent) * eps_estimated_range_percent,
         NA
       ),
 
@@ -2179,7 +2152,8 @@ create_earnings_features <- function(
       open_time,
       # Earnings day indicators
       is_earning_day,
-      is_estimation_day,
+      is_earning_estimation_day,
+      # is_estimation_day,
       # Temporal features
       days_since_last_earnings,
       days_to_next_earnings,
@@ -2202,11 +2176,11 @@ create_earnings_features <- function(
       eps_estimated_low,
       eps_year_ago,
       eps_consensus_grew,
-      eps_consensus_reduced,
-      consensus_change,
-      consensus_change_percent,
-      estimate_range,
-      dispersion_ratio,
+      eps_consensus_declined,
+      eps_consensus_change,
+      eps_consensus_change_percent,
+      eps_estimated_range,
+      eps_estimated_range_percent,
       # Combined features
       surprise_to_dispersion,
       high_uncertainty_surprise,

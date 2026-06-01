@@ -18,41 +18,325 @@ knitr::opts_chunk$set(
 library(invest.stock.db)
 ```
 
-# Introduction
+## Introduction
 This vignette demonstrates how to create a new stock database using the `invest.stock.db` package. We will walk through the steps of setting up a new database, populating it with stock data, and performing basic queries.
-# Setting Up a New Stock Database
-To create a new stock database, we first need to define the structure of our database. This includes specifying the tables and fields that will hold our stock data.
-```{r create_db}
-# Create a new stock database using duckdb
-# db_name <- "test_stock_db"
-# db_path <- file.path(tempdir(), db_name)
-# con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+You can also clone a project implementing it here: https://github.com/henrique-anatole/stock_data_db.
+
+## Setting Up a New Stock Database
+The invest.stock.db package will create it using duckdb and save it in a single file you can later use to connect and query. Therefore, the file name and path are the first variables to define, and this will be used to create the database connection.
+
+```{r example}
+# load the package
+library(invest.stock.db)
+library(tidyverse)
+library(DBI)
+
+# define the path and name of the database file
+db_name <- "test_stock_db.duckdb"
+db_path <- file.path(tempdir(), db_name)
+
+# create the database connection
+db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
 
 ```
 
-# Check the database structure and contents
+## Check the database structure and contents
 ```{r check_db, results='asis'}
-# # check the connection
-# if (!grepl("connection", class(con))) {
-#     stop("Failed to connect to the database.")
-#   }
+# check the connection
+is_valid_db_connection(db_con)
 
-# # List tables in the database
-# tables <- DBI::dbListTables(con)
-# # check if all_symbols table exists
-# if (!"all_symbols" %in% tables) {
-#     stop("Table 'all_symbols' does not exist in the database.")
-#   }
+# List tables in the database. For this example, we expect to see nothing as we have not populated it yet.
+tables <- DBI::dbListTables(db_con)
+tables
 
-# # get the list of symbols
-# all_symbols <- invest.stock.db::get_symbols(con)
+# Clean all tables if any exist (for re-running the example)
+purrr::walk(tables, ~DBI::dbRemoveTable(db_con, .x))
 
 ```
 
-# Populate the Database with Stock Data
 
-```{r populate_db}
+## Symbols data
+
+### Get basic data for all symbols
+
+The first table to populate is the all_symbols table, which contains the list of stock symbols we will work with in the database. 
+
+```{r symbols}
+
+# get the list of symbols and save it to the all_symbols table
+update_symbols_table(db_con, save_data = TRUE)
+
+# Check the contents of the all_symbols table
+all_symbols <- DBI::dbReadTable(db_con, "all_symbols")
+head(all_symbols)
+
+tables <- DBI::dbListTables(db_con)
+dim(all_symbols)
+
+# get the list of benchmark symbols and save it to the benchmark_symbols table
+update_benchmarks(db_con)
+# Check the contents of the benchmark_symbols table
+benchmark_symbols <- DBI::dbReadTable(db_con, "benchmark_symbols")
+head(benchmark_symbols)
+
+# Load everything at once and check the tables again
+all_symbols <- load_all_symbols(db_con)
+head(all_symbols$all_symbols)
+head(all_symbols$all_symbols_au)
+head(all_symbols$all_symbols_br)
+head(all_symbols$all_symbols_sp500)
+head(all_symbols$all_benchmarks)
+```
+
+### Filtering the data
+
+Next, I'll filter the symbols I will get more data for, because the database can get quite large if I try to get data for all symbols. 
+
+```{r filter-symbols, results='asis'}
+# Filter all SP500 symbols, plus the top 100 by rank for ASX and Bovespa
+filtered_symbols <- all_symbols$all_symbols_sp500 %>% 
+  dplyr::bind_rows(
+    all_symbols$all_symbols_au %>% dplyr::slice_max(rank, n = 100)
+  ) %>%
+  dplyr::bind_rows(
+    all_symbols$all_symbols_br %>% dplyr::slice_max(rank, n = 100)
+  ) %>% 
+  dplyr::bind_rows(
+    all_symbols$all_benchmarks
+  ) %>% 
+  dplyr::distinct()
+
+# Check the filtered symbols
+head(filtered_symbols)
+
+```
+
+## Price timeseries data
+
+Once I have the list of symbols I want to work with, I can proceed to get the price time series data for those symbols and populate the prices table in the database. I will start with the daily data.
+
+```{r update-prices-daily, results='asis'}
+# Define the symbols to get data for. For this example, I will get data for the first 3 symbols in the filtered list, but you can change it to get data for all symbols in the filtered list if you want.
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT")
+# symbols_to_get <- filtered_symbols$symbol
+
+# Define the start date and interval for the price data
+start_date <- as.character(Sys.Date() - lubridate::days(200))
+interval <- "1d"
+## Create the daily prices table in this new database
+update_data <- update_stock_prices(
+db_con,
+symbols_to_get,
+start_date,
+interval
+)
+# Check the errors encountered during the update
+price_errors <- update_data$errors %>%
+  dplyr::mutate(frequency = interval)
+
+## Check the contents of the daily_prices table
+daily_price_data <- DBI::dbGetQuery(db_con, "SELECT * FROM daily_prices")
+
+
+
+# 2 Updating the existing table with new data
+## Fake the data to be old
+fake_old_date <- daily_price_data %>% filter(open_time < as.character(Sys.Date() - 30))
+## write back the fake old data to the database
+DBI::dbWriteTable(db_con, "daily_prices", fake_old_date, overwrite = TRUE)
+## Check the contents of the daily_prices table
+symbols_before <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol")
+## Now run the update function again to get the missing recent data
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT", "GOOGL")
+update_data <- update_stock_prices(
+db_con,
+symbols_to_get,
+start_date,
+interval
+)
+## Check the table contents after updating
+symbols_after <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM daily_prices GROUP BY symbol")
+
+# Keep a list of errors encountered during the update
+update_errors <- update_data$errors %>% 
+  dplyr::mutate(frequency = interval)
+
+```
+
+
+```{r update-prices-hour, results='asis'}
+# Set the same to get hourly data, but with a shorter start date to avoid getting too much data for the example
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT")
+start_date <- as.character(Sys.Date() - lubridate::days(7))
+interval <- "1h"
+# Check if the symbol is supported for intraday data
+riingo::is_supported_ticker("A8G")
+
+## Create the daily prices table in this new database
+update_data <- update_stock_prices(
+db_con,
+symbols_to_get,
+start_date,
+interval
+)
+
+## Check the contents of the hourly_prices table
+loaded_data <- DBI::dbGetQuery(db_con, "SELECT * FROM hourly_prices")
+# 2 Updating the existing table with new data
+## Fake the data to be old
+fake_old_date <- loaded_data %>% filter(open_time < as.character(Sys.Date() - 3))
+## write back the fake old data to the database
+DBI::dbWriteTable(db_con, "hourly_prices", fake_old_date, overwrite = TRUE)
+
+# update the errors table again
+update_errors_new <- update_data$errors %>% 
+  dplyr::mutate(frequency = interval)
+
+update_errors <- dplyr::bind_rows(update_errors, update_errors_new) %>% 
+  dplyr::distinct()
+
+
+## Check the contents of the hourly_prices table
+symbols_before <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM hourly_prices GROUP BY symbol")
+## Now run the update function again to get the missing recent data
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT", "GOOGL")
+update_data <- update_stock_prices(
+db_con,
+symbols_to_get,
+start_date,
+interval
+)
+## Check the table contents after updating
+symbols_after <- dbGetQuery(db_con,"SELECT symbol, MIN(open_time) as first_date, MAX(open_time) as last_date FROM hourly_prices GROUP BY symbol")
+
+# update the errors table again
+update_errors_new <- update_data$errors %>% 
+  dplyr::mutate(frequency = interval)
+
+update_errors <- dplyr::bind_rows(update_errors, update_errors_new) %>% 
+  dplyr::distinct()
+
 
 
 ```
 
+
+```{r update-dividends, results='asis'}
+# 
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT")
+start_date <- as.character(Sys.Date() - lubridate::days(600))
+
+## Create the daily prices table in this new database
+update_data <- update_dividends(
+db_con,
+symbols_to_get,
+start_date
+)
+
+## Check the contents of the dividends table
+loaded_data <- DBI::dbGetQuery(db_con, "SELECT * FROM dividends")
+
+# 2 Updating the existing table with new data
+## Fake the data to be old
+fake_old_date <- loaded_data %>% filter(date < as.character(Sys.Date() - 200))
+## write back the fake old data to the database
+DBI::dbWriteTable(db_con, "dividends", fake_old_date, overwrite = TRUE)
+## Check the contents of the daily_prices table
+symbols_before <- dbGetQuery(db_con,"SELECT symbol, MIN(date) as first_date, MAX(date) as last_date FROM dividends GROUP BY symbol")
+## Now run the update function again to get the missing recent data
+symbols_to_get <- c("A8G.AX", "AAPL", "MSFT", "GOOGL")
+update_data <- update_dividends(
+db_con,
+symbols_to_get,
+start_date
+)
+## Check the table contents after updating
+symbols_after <- dbGetQuery(db_con,"SELECT symbol, MIN(date) as first_date, MAX(date) as last_date FROM dividends GROUP BY symbol")
+
+# Keep a list of errors encountered during the update
+update_errors <- update_data$errors %>% 
+  dplyr::mutate(frequency = interval)
+
+
+```
+
+The last step, is to get the fundamental data. Different from the price and dividends data, the source for the fundamental data loads all data at once, not symbol by symbol. Therefore, the update function will get all data provided and then save only the data for the requested symbols to the database.
+
+Currently, the fundamental data source provides only US stock data.
+
+```{r update-fundamentals, results='asis'}
+# Here, the list of fundamental data is the main variable to define
+files_to_get = c(
+    "balance_sheet_equity",
+    "balance_sheet_assets"
+    # "balance_sheet_liabilities",
+    # "cash_flow_statement",
+    # "earnings_calendar",
+    # "eps_estimate",
+    # "eps_history",
+    # "income_statement",
+    # "rank_score",
+    # "sales_estimate"
+  )
+# get a very old date to get all available data
+start_date <- NULL
+
+## Create the daily prices table in this new database
+update_data <- update_fundamentals(
+  db_con,
+  files_to_get,
+  start_date
+)
+
+## Check the contents of the tables created
+for (dataset in files_to_get) {
+  table_name <- dataset
+  loaded_data <- DBI::dbGetQuery(db_con, paste0("SELECT * FROM ", table_name))
+  cat("Contents of table:", table_name, "\n")
+  print(dim(loaded_data))
+  cat("\n")
+}
+
+# 2 Updating the existing tables with new data
+for (dataset in files_to_get) {
+  table_name <- dataset
+  ## Fake the data to be old
+  # load the data
+  loaded_data <- DBI::dbGetQuery(db_con, paste0("SELECT * FROM ", table_name))
+  # filter to get only old data
+  fake_old_date <- loaded_data %>% filter(date < as.character(Sys.Date() - 200))
+  ## write back the fake old data to the database
+  DBI::dbWriteTable(db_con, table_name, fake_old_date, overwrite = TRUE)
+}
+## Check the contents of the tables before updating
+for (dataset in files_to_get) {
+  table_name <- dataset
+  symbols_before <- dbGetQuery(db_con,paste0("SELECT act_symbol, MIN(date) as first_date, MAX(date) as last_date FROM ", table_name, " GROUP BY act_symbol"))
+  cat("Before update - Contents of table:", table_name, "\n")
+  print(head(symbols_before))
+  cat("\n")
+}
+## Now run the update function again to get the missing recent data
+start_date <- as.character(Sys.Date() - lubridate::days(230))
+update_data <- update_fundamentals(
+  db_con,
+  files_to_get,
+  start_date
+)
+## Check the table contents after updating
+for (dataset in files_to_get) {
+  table_name <- dataset
+  symbols_after <- dbGetQuery(db_con,paste0("SELECT act_symbol, MIN(date) as first_date, MAX(date) as last_date FROM ", table_name, " GROUP BY act_symbol"))
+  cat("After update - Contents of table:", table_name, "\n")
+  print(head(symbols_after))
+  cat("\n")
+}
+
+
+```
+
+```{r close, include=FALSE}
+# disconnect when done
+DBI::dbDisconnect(db_con, shutdown = TRUE)
+
+```

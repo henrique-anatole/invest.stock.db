@@ -2,7 +2,6 @@
 temp_db <- tempfile(fileext = ".duckdb")
 temp_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = temp_db, read_only = FALSE)
 
-
 # Add each of the tables from the sample_stock_prices dataset to the temporary database for testing
 for (table_name in names(sample_stock_prices)) {
   DBI::dbWriteTable(
@@ -21,7 +20,10 @@ for (table_name in names(sample_fundamentals)) {
     sample_fundamentals[[table_name]],
     overwrite = TRUE
   )
+  print(paste(table_name))
+  print(str(sample_fundamentals[[table_name]]))
 }
+
 benchmarks <- invest.data::create_benchmarks()
 DBI::dbWriteTable(
   temp_con,
@@ -127,7 +129,7 @@ test_that("add_indicators - first set", {
     indicators = indicators,
     db_con = temp_con
   )
-  names(result)
+
   # any column named with .x or .y?
   expect_false(any(grepl("\\.x|\\.y", names(result))))
   # Check if the result is a data frame
@@ -272,3 +274,41 @@ test_that("add_indicators - first set", {
 
   expect_false(any(grepl("vol_sma|volume_relative|obv", names(result))))
 })
+
+
+indicators <- c(
+  "smas",
+  "ema",
+  "bollinger",
+  "macd",
+  "volatility",
+  "gaps",
+  "min_max",
+  "pivots",
+  "rsi",
+  "stochastic_k",
+  "momentum",
+  "roc",
+  "ker",
+  "rsi_volume",
+  "force_index",
+  "vol_sma",
+  "obv",
+  "volume_relative",
+  "vwap",
+  "keltner_bands",
+  "adx",
+  "cci",
+  "ichimoku_cloud",
+  "external_indexes",
+  "eps_data",
+  "calendar"
+)
+
+result <- add_indicators(
+  prepared_data = prepared_data,
+  indicators = indicators,
+  db_con = temp_con
+)
+
+names(result)

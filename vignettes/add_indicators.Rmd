@@ -1,0 +1,28 @@
+---
+title: "add_indicators"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{add_indicators}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(invest.stock.db)
+```
+
+Two main files with indicators functions:
+- R/indicators_functions.R
+- R/add_indicators.R
+
+# indicators_functions.R
+smas - timeframe, periods = c(20, 50, 150, 200)
+emas - timeframe, periods = c(20, 50, 150, 200)
+bollinger_bands - timeframe, period = 20

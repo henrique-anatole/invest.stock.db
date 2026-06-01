@@ -28,7 +28,7 @@ add_indicators <- function(
       left_join(smas, by = c("symbol", "open_time"))
   }
   # emas
-  if (any(grepl("ema", indicators))) {
+  if (any(grepl("emas", indicators))) {
     prepared_data <- prepared_data %>%
       get_emas(periods = c(20, 50, 150, 200))
   }
@@ -235,6 +235,7 @@ add_indicators <- function(
       # , fake_Q3_2019 = FALSE
     )
   }
+
   # xgb_model
   if (any(grepl("xgb_model", indicators)) & !is.null(model_labels)) {
     xgb_model <- get_xgb_indicator(model_labels = model_labels)
@@ -283,7 +284,8 @@ add_indicators <- function(
     prepared_data <- prepared_data %>%
       mutate(
         weekday = lubridate::wday(open_time),
-        day_of_month = lubridate::day(open_time)
+        day_of_month = lubridate::day(open_time),
+        month = lubridate::month(open_time)
       )
   }
   # Load price moves

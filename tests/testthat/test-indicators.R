@@ -1,7 +1,7 @@
+library(invest.stock.db)
 # Create a temporary duckdb database with sample data for testing
 temp_db <- tempfile(fileext = ".duckdb")
 temp_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = temp_db, read_only = FALSE)
-
 
 # Add each of the tables from the sample_stock_prices dataset to the temporary database for testing
 for (table_name in names(sample_stock_prices)) {
@@ -28,7 +28,7 @@ for (table_name in names(sample_fundamentals)) {
 daily_prices <- DBI::dbGetQuery(temp_con, "SELECT * FROM daily_prices")
 
 # Test the indicators functions
-testthat::test_that("calculate_single_ema: Working examples", {
+testthat::test_that("calculate_smas: Working examples", {
   smas <- get_smas(
     temp_con,
     timeframe = "1d",
@@ -246,7 +246,7 @@ testthat::test_that("get_macd calculates correctly", {
 testthat::test_that("get_volatilities calculates expected metrics", {
   periods <- c(10, 20)
   res <- get_volatilities(
-    temp_con = temp_con,
+    temp_con,
     timeframe = "1d",
     periods = periods
   )
