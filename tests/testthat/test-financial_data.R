@@ -42,8 +42,8 @@ teardown_test_db <- function(con) {
 # --- get_balance_sheet_equity tests ---
 
 testthat::test_that("get_balance_sheet_equity: returns data for all symbols", {
-  db_con <- setup_test_db()
-  withr::defer(teardown_test_db(db_con))
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
 
   result <- get_balance_sheet_equity(con)
 
@@ -264,7 +264,7 @@ testthat::test_that("get_sales_estimates: contains optimism/pessimism columns", 
 
 # --- get_valuation_data tests ---
 
-testthat::test_that("get_valuation_data: returns data with valid inputs", {
+testthat::test_that("get_valuation_data: returns enriched data frame with valid inputs", {
   con <- setup_test_db()
   withr::defer(teardown_test_db(con))
 
@@ -272,11 +272,37 @@ testthat::test_that("get_valuation_data: returns data with valid inputs", {
 
   result <- get_valuation_data(con, price_data)
 
-  testthat::expect_type(result, "list")
-  testthat::expect_true("balance_sheet" %in% names(result))
-  testthat::expect_true("income_statement" %in% names(result))
-  testthat::expect_true("sales_estimates" %in% names(result))
-  testthat::expect_true("merged_data" %in% names(result))
+  testthat::expect_s3_class(result, "data.frame")
+  testthat::expect_true(nrow(result) > 0)
+  # Required balance sheet columns
+  testthat::expect_true("common_stock" %in% names(result))
+  testthat::expect_true("retained_earnings" %in% names(result))
+  testthat::expect_true("total_equity" %in% names(result))
+  testthat::expect_true("shares_outstanding" %in% names(result))
+  testthat::expect_true("book_value_per_share" %in% names(result))
+  # Required income statement columns
+  testthat::expect_true("sales" %in% names(result))
+  testthat::expect_true("average_shares" %in% names(result))
+  # Valuation ratios
+  testthat::expect_true("market_cap" %in% names(result))
+  testthat::expect_true("price_to_book" %in% names(result))
+  testthat::expect_true("price_to_sales" %in% names(result))
+  testthat::expect_true("price_to_earnings" %in% names(result))
+  testthat::expect_true("earnings_yield" %in% names(result))
+  testthat::expect_true("return_on_equity" %in% names(result))
+  testthat::expect_true("enterprise_value_proxy" %in% names(result))
+  testthat::expect_true("ev_to_sales" %in% names(result))
+})
+
+testthat::test_that("get_valuation_data: has same number of rows as input price data", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  price_data <- DBI::dbReadTable(con, "daily_prices")
+
+  result <- get_valuation_data(con, price_data)
+
+  testthat::expect_equal(nrow(result), nrow(price_data))
 })
 
 testthat::test_that("get_valuation_data: errors on invalid connection", {
@@ -312,7 +338,28 @@ testthat::test_that("get_valuation_data: returns early for empty symbol list", {
   testthat::expect_equal(nrow(result), 0)
 })
 
-testthat::test_that("get_valuation_data: filters by period", {
+testthat::test_that("get_valuation_data: forward-fills fundamental values", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  price_data <- DBI::dbReadTable(con, "daily_prices")
+
+  result <- get_valuation_data(con, price_data)
+
+  # After forward-filling, most rows should have non-NA valuation data
+  # (except rows before the first fundamental release)
+  aapl <- result[result$symbol == "AAPL", ]
+  # Find first fundamental release
+  first_release <- min(which(aapl$is_fundamental_release))
+  if (!is.infinite(first_release) && first_release < nrow(aapl)) {
+    # After the first release, book_value_per_share should be filled
+    testthat::expect_true(
+      !all(is.na(aapl$book_value_per_share[(first_release + 1):nrow(aapl)]))
+    )
+  }
+})
+
+testthat::test_that("get_valuation_data: filters by period Year", {
   con <- setup_test_db()
   withr::defer(teardown_test_db(con))
 
@@ -320,9 +367,167 @@ testthat::test_that("get_valuation_data: filters by period", {
 
   result <- get_valuation_data(con, price_data, period = "Year")
 
-  testthat::expect_type(result, "list")
-  # Balance sheet should only have Year periods
-  if (nrow(result$balance_sheet) > 0) {
-    testthat::expect_true(all(grepl("Year", result$balance_sheet$period)))
+  testthat::expect_s3_class(result, "data.frame")
+  # Fundamental release rows should only be from Year periods
+  releases <- result[result$is_fundamental_release, ]
+  if (nrow(releases) > 0) {
+    testthat::expect_true(all(grepl("Year", releases$period)))
   }
+})
+
+# --- get_leverage_data tests ---
+
+testthat::test_that("get_leverage_data: returns enriched data frame", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  price_data <- DBI::dbReadTable(con, "daily_prices")
+
+  result <- get_leverage_data(con, price_data)
+
+  testthat::expect_s3_class(result, "data.frame")
+  testthat::expect_true(nrow(result) > 0)
+  testthat::expect_true("total_debt" %in% names(result))
+  testthat::expect_true("net_debt" %in% names(result))
+  testthat::expect_true("debt_to_equity" %in% names(result))
+  testthat::expect_true("current_ratio" %in% names(result))
+  testthat::expect_true("quick_ratio" %in% names(result))
+  testthat::expect_true("enterprise_value" %in% names(result))
+  testthat::expect_true("ev_to_ebitda" %in% names(result))
+  testthat::expect_true("net_debt_to_ebitda" %in% names(result))
+})
+
+testthat::test_that("get_leverage_data: has same rows as input", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  price_data <- DBI::dbReadTable(con, "daily_prices")
+
+  result <- get_leverage_data(con, price_data)
+
+  testthat::expect_equal(nrow(result), nrow(price_data))
+})
+
+testthat::test_that("get_leverage_data: errors on invalid connection", {
+  price_data <- data.frame(symbol = "AAPL")
+
+  testthat::expect_error(
+    get_leverage_data(NULL, price_data),
+    "db_con must be a valid DBI connection"
+  )
+})
+
+testthat::test_that("get_leverage_data: errors if missing symbol column", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  testthat::expect_error(
+    get_leverage_data(con, data.frame(ticker = "AAPL")),
+    "symbols_price_data must contain a 'symbol' column"
+  )
+})
+
+testthat::test_that("get_leverage_data: returns early for empty symbols", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  result <- get_leverage_data(con, data.frame(symbol = character(0)))
+
+  testthat::expect_s3_class(result, "data.frame")
+  testthat::expect_equal(nrow(result), 0)
+})
+
+# --- get_cash_flow_data tests ---
+
+testthat::test_that("get_cash_flow_data: returns enriched data frame", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  price_data <- DBI::dbReadTable(con, "daily_prices")
+
+  result <- get_cash_flow_data(con, price_data)
+
+  testthat::expect_s3_class(result, "data.frame")
+  testthat::expect_true(nrow(result) > 0)
+  testthat::expect_true("free_cash_flow" %in% names(result))
+  testthat::expect_true("price_to_fcf" %in% names(result))
+  testthat::expect_true("fcf_yield" %in% names(result))
+  testthat::expect_true("operating_cf_margin" %in% names(result))
+  testthat::expect_true("capex_to_operating_cf" %in% names(result))
+  testthat::expect_true("cf_quality" %in% names(result))
+  testthat::expect_true("fcf_per_share" %in% names(result))
+  testthat::expect_true("net_cash_from_operating_activities" %in% names(result))
+  testthat::expect_true("capital_expenditures" %in% names(result))
+})
+
+testthat::test_that("get_cash_flow_data: has same rows as input", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  price_data <- DBI::dbReadTable(con, "daily_prices")
+
+  result <- get_cash_flow_data(con, price_data)
+
+  testthat::expect_equal(nrow(result), nrow(price_data))
+})
+
+testthat::test_that("get_cash_flow_data: errors on invalid connection", {
+  price_data <- data.frame(symbol = "AAPL")
+
+  testthat::expect_error(
+    get_cash_flow_data(NULL, price_data),
+    "db_con must be a valid DBI connection"
+  )
+})
+
+testthat::test_that("get_cash_flow_data: errors if missing symbol column", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  testthat::expect_error(
+    get_cash_flow_data(con, data.frame(ticker = "AAPL")),
+    "symbols_price_data must contain a 'symbol' column"
+  )
+})
+
+testthat::test_that("get_cash_flow_data: returns early for empty symbols", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  result <- get_cash_flow_data(con, data.frame(symbol = character(0)))
+
+  testthat::expect_s3_class(result, "data.frame")
+  testthat::expect_equal(nrow(result), 0)
+})
+
+# --- get_full_fundamentals tests ---
+
+testthat::test_that("get_full_fundamentals: combines all three functions", {
+  con <- setup_test_db()
+  withr::defer(teardown_test_db(con))
+
+  price_data <- DBI::dbReadTable(con, "daily_prices")
+
+  result <- get_full_fundamentals(con, price_data)
+
+  testthat::expect_s3_class(result, "data.frame")
+  testthat::expect_equal(nrow(result), nrow(price_data))
+  # Valuation columns
+  testthat::expect_true("price_to_book" %in% names(result))
+  testthat::expect_true("price_to_earnings" %in% names(result))
+  # Leverage columns
+  testthat::expect_true("debt_to_equity" %in% names(result))
+  testthat::expect_true("enterprise_value" %in% names(result))
+  # Cash flow columns
+  testthat::expect_true("free_cash_flow" %in% names(result))
+  testthat::expect_true("fcf_yield" %in% names(result))
+})
+
+testthat::test_that("get_full_fundamentals: errors on invalid connection", {
+  price_data <- data.frame(symbol = "AAPL")
+
+  testthat::expect_error(
+    get_full_fundamentals(NULL, price_data),
+    "db_con must be a valid DBI connection"
+  )
 })

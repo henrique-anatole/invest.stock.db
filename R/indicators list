@@ -88,6 +88,66 @@ eps_data; ; previous_reported; get_eps_data; The EPS reported in the previous pe
 eps_data; ; previous_estimate; get_eps_data; The consensus EPS estimate from the previous period, used to assess changes in market expectations.
 eps_data; ; consecutive_growth; get_eps_data; A measure of how many consecutive periods the company has experienced growth in EPS, used to assess the consistency of company performance.
 eps_data; ; quarter; get_eps_data; The fiscal quarter of the earnings event, used to align earnings data with seasonal patterns and analysis.
+valuation; period = "Quarter"; is_fundamental_release; get_valuation_data; A boolean flag indicating the trading day when new fundamental data (balance sheet + income statement) becomes available to the market.
+valuation; period = "Quarter"; common_stock; get_valuation_data; The par value of common shares issued, representing the basic equity capital of the company.
+valuation; period = "Quarter"; retained_earnings; get_valuation_data; Cumulative net income retained in the business rather than distributed as dividends, indicating long-term profitability.
+valuation; period = "Quarter"; total_equity; get_valuation_data; Total shareholders' equity (book value), representing the net assets attributable to shareholders.
+valuation; period = "Quarter"; shares_outstanding; get_valuation_data; The number of shares currently issued and held by investors, used for per-share calculations.
+valuation; period = "Quarter"; book_value_per_share; get_valuation_data; Total equity divided by shares outstanding, representing the net asset value per share.
+valuation; period = "Quarter"; total_liabilities_and_equity; get_valuation_data; Total balance sheet size (assets = liabilities + equity), indicating the overall scale of the company.
+valuation; period = "Quarter"; sales; get_valuation_data; Total revenue for the period, the top-line measure of business activity.
+valuation; period = "Quarter"; gross_profit; get_valuation_data; Revenue minus cost of goods sold, measuring core profitability before operating expenses.
+valuation; period = "Quarter"; net_income; get_valuation_data; Bottom-line profit after all expenses, taxes, and interest, measuring overall profitability.
+valuation; period = "Quarter"; average_shares; get_valuation_data; Weighted average shares outstanding used to compute diluted EPS.
+valuation; period = "Quarter"; diluted_net_eps; get_valuation_data; Diluted earnings per share from the income statement, accounting for all potential share dilution.
+valuation; period = "Quarter"; market_cap; get_valuation_data; Market capitalisation calculated as close price multiplied by shares outstanding.
+valuation; period = "Quarter"; price_to_book; get_valuation_data; Price-to-Book ratio: close price divided by book value per share, measuring how the market values net assets.
+valuation; period = "Quarter"; price_to_sales; get_valuation_data; Price-to-Sales ratio: market cap divided by annualised revenue, used for valuing growth companies with volatile earnings.
+valuation; period = "Quarter"; price_to_earnings; get_valuation_data; Price-to-Earnings ratio: market cap divided by annualised net income, the most widely used valuation multiple.
+valuation; period = "Quarter"; earnings_yield; get_valuation_data; Inverse of P/E expressed as a percentage, comparable to bond yields for relative value assessment.
+valuation; period = "Quarter"; gross_margin; get_valuation_data; Gross profit as a percentage of sales, measuring pricing power and production efficiency.
+valuation; period = "Quarter"; net_margin; get_valuation_data; Net income as a percentage of sales, measuring overall profitability after all costs.
+valuation; period = "Quarter"; return_on_equity; get_valuation_data; Annualised net income divided by total equity, measuring how efficiently the company generates profit from shareholders' capital.
+valuation; period = "Quarter"; enterprise_value_proxy; get_valuation_data; Approximate enterprise value using total liabilities as a proxy for debt, directionally useful for relative comparisons.
+valuation; period = "Quarter"; ev_to_sales; get_valuation_data; Enterprise value divided by annualised sales, a capital-structure-neutral revenue multiple.
+valuation; period = "Quarter"; sales_estimates_consensus; get_valuation_data; The consensus analyst estimate for sales, used for earnings surprise detection.
+valuation; period = "Quarter"; sales_estimates_count; get_valuation_data; The number of analyst estimates contributing to the sales consensus.
+valuation; period = "Quarter"; sales_estimates_grew; get_valuation_data; Boolean indicating whether the sales consensus estimate increased versus the prior period.
+valuation; period = "Quarter"; sales_estimates_declined; get_valuation_data; Boolean indicating whether the sales consensus estimate decreased versus the prior period.
+valuation; period = "Quarter"; sales_consensus_change; get_valuation_data; Absolute change in the sales consensus estimate from the prior period.
+valuation; period = "Quarter"; sales_consensus_change_percent; get_valuation_data; Percentage change in the sales consensus estimate from the prior period.
+valuation; period = "Quarter"; sales_surprise_amount; get_valuation_data; Actual sales minus consensus estimate, measuring the magnitude of the sales beat or miss.
+valuation; period = "Quarter"; sales_surprise_percent; get_valuation_data; Sales surprise as a percentage of actual sales, measuring relative beat/miss magnitude.
+valuation; period = "Quarter"; sales_consensus_optimist; get_valuation_data; Boolean indicating whether the current-period sales estimate exceeds the next-period estimate, signalling optimistic near-term expectations.
+valuation; period = "Quarter"; sales_consensus_pessimist; get_valuation_data; Boolean indicating whether the current-period sales estimate is below the next-period estimate, signalling pessimistic near-term expectations.
+leverage; period = "Quarter"; total_debt; get_leverage_data; Total financial debt (long-term debt + current portion of long-term debt), the key leverage numerator.
+leverage; period = "Quarter"; net_debt; get_leverage_data; Total debt minus cash and equivalents, representing the true borrowing burden after liquid assets.
+leverage; period = "Quarter"; cash_and_equivalents; get_leverage_data; Liquid assets readily available to service debt or fund operations.
+leverage; period = "Quarter"; total_current_liabilities; get_leverage_data; Obligations due within one year, used for liquidity ratio calculations.
+leverage; period = "Quarter"; total_current_assets; get_leverage_data; Assets expected to be converted to cash within one year, used for liquidity ratios.
+leverage; period = "Quarter"; total_liabilities; get_leverage_data; All financial obligations of the company, both current and non-current.
+leverage; period = "Quarter"; total_assets; get_leverage_data; Total balance sheet assets, representing the overall resource base of the company.
+leverage; period = "Quarter"; debt_to_equity; get_leverage_data; Total debt divided by total equity, the primary measure of financial leverage and bankruptcy risk.
+leverage; period = "Quarter"; current_ratio; get_leverage_data; Current assets divided by current liabilities, measuring short-term liquidity and ability to meet near-term obligations.
+leverage; period = "Quarter"; quick_ratio; get_leverage_data; (Current assets minus inventories) divided by current liabilities, a stricter liquidity test excluding illiquid inventory.
+leverage; period = "Quarter"; enterprise_value; get_leverage_data; Proper enterprise value calculated as market cap plus net debt, representing the total cost to acquire the business.
+leverage; period = "Quarter"; ev_to_ebitda; get_leverage_data; Enterprise value divided by annualised EBITDA, the most widely used institutional valuation multiple for leveraged buyouts and comparables.
+leverage; period = "Quarter"; net_debt_to_ebitda; get_leverage_data; Net debt divided by annualised EBITDA, measuring how many years of earnings are needed to repay debt (credit risk metric).
+leverage; period = "Quarter"; ebitda; get_leverage_data; Earnings before interest, taxes, depreciation, and amortisation for the period, a proxy for operating cash generation.
+leverage; period = "Quarter"; annualised_ebitda; get_leverage_data; EBITDA annualised (quarterly × 4), used as the denominator for EV/EBITDA and coverage ratios.
+cash_flow; period = "Quarter"; is_cash_flow_release; get_cash_flow_data; A boolean flag indicating the trading day when new cash flow statement data becomes available.
+cash_flow; period = "Quarter"; net_cash_from_operating_activities; get_cash_flow_data; Cash generated from core business operations, the most important line on the cash flow statement.
+cash_flow; period = "Quarter"; capital_expenditures; get_cash_flow_data; Cash spent on property, plant, and equipment (typically negative), measuring reinvestment intensity.
+cash_flow; period = "Quarter"; free_cash_flow; get_cash_flow_data; Operating cash flow minus capital expenditures, representing cash available for dividends, buybacks, and debt reduction.
+cash_flow; period = "Quarter"; net_cash_from_financing_activities; get_cash_flow_data; Cash flows from debt issuance, repayment, equity issuance, and dividends, indicating capital structure changes.
+cash_flow; period = "Quarter"; payment_of_dividends_and_other_distributions; get_cash_flow_data; Cash returned to shareholders via dividends, used to assess payout sustainability.
+cash_flow; period = "Quarter"; cash_at_end_of_period; get_cash_flow_data; Ending cash balance for the period, indicating liquidity position.
+cash_flow; period = "Quarter"; price_to_fcf; get_cash_flow_data; Market cap divided by annualised free cash flow, a valuation multiple less prone to accounting manipulation than P/E.
+cash_flow; period = "Quarter"; fcf_yield; get_cash_flow_data; Annualised free cash flow as a percentage of market cap, comparable to dividend yield but includes retained cash.
+cash_flow; period = "Quarter"; operating_cf_margin; get_cash_flow_data; Operating cash flow as a percentage of annualised sales, measuring cash conversion efficiency of revenue.
+cash_flow; period = "Quarter"; capex_to_operating_cf; get_cash_flow_data; Capital expenditures as a percentage of operating cash flow, measuring reinvestment intensity (high = asset-heavy business).
+cash_flow; period = "Quarter"; cf_quality; get_cash_flow_data; Operating cash flow divided by net income. Values > 1 indicate high-quality earnings backed by actual cash generation.
+cash_flow; period = "Quarter"; fcf_per_share; get_cash_flow_data; Free cash flow divided by shares outstanding, a per-share measure of cash generation useful for peer comparison.
 calendar; ; weekday; ; Temporal features for seasonality analysis.
 calendar; ; day_of_the_month; ; Temporal features for seasonality analysis.
 calendar; ; month; ; Temporal features for seasonality analysis.
