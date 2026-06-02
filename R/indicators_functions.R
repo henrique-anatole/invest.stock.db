@@ -2049,7 +2049,10 @@ create_earnings_features <- function(
           yoy_growth,
           sequential_growth,
           # consistent_beats,
-          consecutive_beats
+          consecutive_beats,
+          previous_reported,
+          previous_estimate,
+          consecutive_growth
         ),
         ~ zoo::na.locf(.x, na.rm = FALSE)
       ),
