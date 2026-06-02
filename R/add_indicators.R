@@ -236,6 +236,11 @@ add_indicators <- function(
     )
   }
 
+  # fundamental indicators
+  if (any(grepl("fundamental", indicators))) {
+    prepared_data <- get_full_fundamentals(db_con, prepared_data)
+  }
+
   # xgb_model
   if (any(grepl("xgb_model", indicators)) & !is.null(model_labels)) {
     xgb_model <- get_xgb_indicator(model_labels = model_labels)
