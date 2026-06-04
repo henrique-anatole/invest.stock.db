@@ -1811,7 +1811,7 @@ get_eps_data <- function(
   earnings_calendar <- tryCatch(
     {
       get_earnings_calendar(db_con) %>%
-        filter(symbol %in% symbol)
+        filter(symbol %in% !!symbol)
       # %>%
       # select(-date)
     },
@@ -1819,12 +1819,21 @@ get_eps_data <- function(
       tibble::tibble(symbol = character(), open_time = as.Date(character()))
     }
   )
+  # To avoid issues due to duplicates, if there are multiple entries for the same symbol and period, apply the following logic:
+  # Ignore records if the date is smaller than the period_end_date (since those are likely early estimates or duplicates)
+  # Consider only the first record for each symbol and period where the date is greater than or equal to the period_end_date (the actual earnings day)
+  earnings_calendar <- earnings_calendar %>%
+    group_by(symbol, period_label) %>%
+    filter(date >= period_end_date) %>%
+    arrange(symbol, date) %>%
+    slice(1) %>%
+    ungroup()
 
   eps_history <- tryCatch(
     {
       get_eps_history(db_con, symbol) %>%
         select(-period_end_date) %>%
-        filter(symbol %in% symbol)
+        filter(symbol %in% !!symbol)
     },
     error = function(e) {
       tibble::tibble(symbol = character())
