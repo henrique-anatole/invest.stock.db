@@ -7,76 +7,173 @@
 
 <!-- badges: end -->
 
-The goal of invest.stock.db is to support the creation of a structured
-database for stock data to facilitate investment analysis.
+`invest.stock.db` helps you build and maintain a local DuckDB database
+for investment research.
+
+The package is designed for reproducible workflows where you want to:
+
+1.  Create and maintain symbol universes and benchmarks.
+2.  Incrementally update prices, dividends, and fundamentals.
+3.  Compute technical indicators and derived features from stored data.
+
+`invest.stock.db` works together with `invest.data`:
+
+- `invest.data` fetches and standardizes market/fundamental data.
+- `invest.stock.db` stores and updates this data in database tables for
+  downstream analysis/backtesting.
+
+### How does it compare to other packages?
+
+Several R packages can retrieve financial data, but they focus on
+different layers:
+
+- **`tidyquant::tq_get()`**  
+  Useful for direct ad-hoc downloads.  
+  *Difference*: `invest.stock.db` adds a **database-first workflow**
+  (incremental updates, table management, and persistence).
+
+- **`quantmod::getSymbols()`**  
+  Great for quick series access in `xts` workflows.  
+  *Difference*: `invest.stock.db` is focused on **multi-table DuckDB
+  pipelines** and integrates with tidyverse-style tabular workflows.
+
+- **`BatchGetSymbols`**  
+  Strong for Yahoo batch retrieval and return calculations.  
+  *Difference*: `invest.stock.db` is broader operationally: symbols +
+  benchmarks + prices + dividends + fundamentals, with unified update
+  functions.
+
+- **Using DuckDB + custom scripts directly**  
+  Flexible, but each project reimplements ingestion/update logic.  
+  *Difference*: `invest.stock.db` provides a **ready-to-use set of
+  update helpers** and indicator functions that reduce boilerplate.
+
+In short, `invest.stock.db` is less about one-off downloads and more
+about maintaining a durable local market-data store for repeatable
+analysis.
 
 ## Installation
 
-You can install the development version of this package from GitHub:
+Install the development versions from GitHub:
 
 ``` r
 # install.packages("remotes")
-remotes::install_github("henrique-anatole/invest.stock.db", dependencies = TRUE)
+remotes::install_github("henrique-anatole/invest.data", dependencies = TRUE)
+remotes::install_github("henrique-anatole/invest.stock.db", dependencies = TRUE, build_vignettes = TRUE)
 ```
 
-## Step by step example
-
-The step by step below will allow you to create your own database. The
-invest.stock.db package will create it using duckdb and save it in a
-single file you can later use to connect and query. Therefore, the file
-name and path are the first variables to define, and this will be used
-to create the database connection. You can clone a project implementing
-it here: <https://github.com/henrique-anatole/stock_data_db>
+## Minimal quickstart
 
 ``` r
-# load the package
-library(invest.stock.db)
-#> Warning: replacing previous import 'readr::guess_encoding' by
-#> 'rvest::guess_encoding' when loading 'invest.data'
-#> Registered S3 method overwritten by 'quantmod':
-#>   method            from
-#>   as.zoo.data.frame zoo
-library(tidyverse)
-#> ── Attaching core tidyverse packages ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── tidyverse 2.0.0 ──
-#> ✔ dplyr     1.2.1     ✔ readr     2.2.0
-#> ✔ forcats   1.0.1     ✔ stringr   1.6.0
-#> ✔ ggplot2   4.0.3     ✔ tibble    3.3.1
-#> ✔ lubridate 1.9.5     ✔ tidyr     1.3.2
-#> ✔ purrr     1.2.2
-#> ── Conflicts ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── tidyverse_conflicts() ──
-#> ✖ dplyr::filter() masks stats::filter()
-#> ✖ dplyr::lag()    masks stats::lag()
-#> ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
 library(DBI)
+library(duckdb)
+library(invest.stock.db)
 
-# define the path and name of the database file
-db_name <- "test_stock_db2"
-db_path <- file.path(tempdir(), db_name)
+# 1) Create/connect to a local DuckDB file
+db_file <- file.path(tempdir(), "stock_db.duckdb")
+db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_file, read_only = FALSE)
 
-# create the database connection
-db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_path, read_only = FALSE)
+# 2) Build symbol and benchmark tables
+update_symbols_table(db_con = db_con, indexes = c("SP500"))
+update_benchmarks(db_con = db_con)
+
+# 3) Update core market tables for selected symbols
+symbols <- c("AAPL", "MSFT", "NVDA")
+update_stock_prices(
+  db_con = db_con,
+  symbols_to_get = symbols,
+  start_date = "2024-01-01",
+  interval = "1d"
+)
+update_dividends(
+  db_con = db_con,
+  symbols_to_get = symbols,
+  start_date = "2020-01-01"
+)
+
+# 4) Update fundamentals tables
+update_fundamentals(
+  db_con = db_con,
+  files_to_get = c("income_statement", "cash_flow_statement"),
+  start_date = "2021-01-01"
+)
+
+# 5) Inspect loaded data
+prices_preview <- DBI::dbGetQuery(db_con, "SELECT * FROM daily_prices LIMIT 10")
+symbols_preview <- DBI::dbGetQuery(db_con, "SELECT * FROM all_symbols LIMIT 10")
+
+# 6) Close connection when done
+DBI::dbDisconnect(db_con)
 ```
 
-## Check the database structure and contents
+For an end-to-end walkthrough, see the vignette `my_new_stock_db`.
+
+## Main functions
+
+### Database update workflows
+
+- `update_symbols_table()`
+  - Creates/updates the `all_symbols` table from ASX/B3/SP500 universes.
+- `update_benchmarks()`
+  - Creates/updates `benchmark_symbols`.
+- `update_stock_prices()`
+  - Incrementally updates `daily_prices` (`"1d"`) or `hourly_prices`
+    (`"1h"`).
+- `update_dividends()`
+  - Incrementally updates the `dividends` table.
+- `update_fundamentals()`
+  - Updates multiple fundamentals tables using
+    `invest.data::get_fundamentals_data()`.
+
+### Reading and validation
+
+- `load_all_symbols()`
+  - Loads symbols and benchmark subsets from the database.
+- `is_valid_db_connection()`
+  - Validates DBI connection status before update operations.
+
+### Indicators and engineered features
+
+- `add_indicators()`
+  - Adds technical indicator columns to a data frame.
+- Indicator helpers: `get_macd()`, `get_smas()`, `get_emas()`,
+  `get_adx()`, `get_bollinger_bands()`, `get_ichimoku_cloud()`, and
+  others.
+- Earnings/feature helpers: `get_earnings_calendar()`,
+  `create_earnings_features()`, `check_recent_gaps()`,
+  `check_high_before_low()`.
+
+## Vignettes
 
 ``` r
-# check the connection
-is_valid_db_connection(db_con)
+browseVignettes("invest.stock.db")
 ```
 
-\[1\] TRUE
+Key guides include:
 
-``` r
+- `my_new_stock_db`: create a new stock database end-to-end.
+- `browse_stock_data`: query and inspect stored market data.
+- `add_indicators`: calculate indicators and feature columns.
 
-# List tables in the database. For this example, we expect to see nothing as we have not populated it yet.
-tables <- DBI::dbListTables(db_con)
-tables
-```
+## Included sample datasets
 
-character(0)
+- `sample_all_symbols`
+- `sample_stock_prices`
+- `sample_fundamentals`
 
-``` r
+## Operational notes
 
-# Clean all tables if any exist (for re-running the example)
-purrr::walk(tables, ~DBI::dbRemoveTable(db_con, .x))
-```
+- `update_*` functions are designed for incremental updates and avoid
+  duplicate inserts.
+- Most fetch/update workflows rely on upstream data providers via
+  `invest.data`, so network/API availability may affect results.
+- For large universes, run updates in batches and/or on a schedule.
+
+## Data sources
+
+| Function                 | Primary source(s)                               |
+|--------------------------|-------------------------------------------------|
+| `update_stock_prices()`  | Yahoo Finance / Tiingo (via `invest.data`)      |
+| `update_dividends()`     | Yahoo Finance (via `invest.data`)               |
+| `update_symbols_table()` | SP500, ASX, B3 scrapers (via `invest.data`)     |
+| `update_fundamentals()`  | DoltHub earnings repository (via `invest.data`) |

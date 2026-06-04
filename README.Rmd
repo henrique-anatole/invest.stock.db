@@ -18,37 +18,157 @@ knitr::opts_chunk$set(
 <!-- badges: start -->
 <!-- badges: end -->
 
-The goal of invest.stock.db is to support the creation of a structured database for stock data to facilitate investment analysis.
-It also provides a set of functions to calculate common financial metrics and indicators on the data stored in the database. 
+`invest.stock.db` helps you build and maintain a local DuckDB database for investment research.
+
+The package is designed for reproducible workflows where you want to:
+
+1. Create and maintain symbol universes and benchmarks.
+2. Incrementally update prices, dividends, and fundamentals.
+3. Compute technical indicators and derived features from stored data.
+
+`invest.stock.db` works together with `invest.data`:
+
+- `invest.data` fetches and standardizes market/fundamental data.
+- `invest.stock.db` stores and updates this data in database tables for downstream analysis/backtesting.
+
+### How does it compare to other packages?
+
+Several R packages can retrieve financial data, but they focus on different layers:
+
+- **`tidyquant::tq_get()`**  
+  Useful for direct ad-hoc downloads.  
+  *Difference*: `invest.stock.db` adds a **database-first workflow** (incremental updates, table management, and persistence).
+
+- **`quantmod::getSymbols()`**  
+  Great for quick series access in `xts` workflows.  
+  *Difference*: `invest.stock.db` is focused on **multi-table DuckDB pipelines** and integrates with tidyverse-style tabular workflows.
+
+- **`BatchGetSymbols`**  
+  Strong for Yahoo batch retrieval and return calculations.  
+  *Difference*: `invest.stock.db` is broader operationally: symbols + benchmarks + prices + dividends + fundamentals, with unified update functions.
+
+- **Using DuckDB + custom scripts directly**  
+  Flexible, but each project reimplements ingestion/update logic.  
+  *Difference*: `invest.stock.db` provides a **ready-to-use set of update helpers** and indicator functions that reduce boilerplate.
+
+In short, `invest.stock.db` is less about one-off downloads and more about maintaining a durable local market-data store for repeatable analysis.
 
 ## Installation
 
-This package is still in development, and is highly linked to a second package: "invest.data". The invest.data package is responsible for getting the data from different sources and providing it in a structured format, while the invest.stock.db package is responsible for creating the database and populating it with the data provided by invest.data. Therefore, to use invest.stock.db, you will also need to install invest.data.
-
-You can install the development version of both packages from GitHub:
+Install the development versions from GitHub:
 
 ``` r
-# install.packages("remotes") # if you don't have it already
-# dependencies = TRUE will install all the packages needed to run the functions in invest.stock.db, 
-# and build_vignettes = TRUE will build the vignettes so you can access them after installing the package.
-remotes::install_github("henrique-anatole/invest.data", dependencies = TRUE, build_vignettes = TRUE)
+# install.packages("remotes")
+remotes::install_github("henrique-anatole/invest.data", dependencies = TRUE)
 remotes::install_github("henrique-anatole/invest.stock.db", dependencies = TRUE, build_vignettes = TRUE)
-
 ```
 
-## Step by step example
+## Minimal quickstart
 
-A step by step on how to create a new stock price database can be checked in the vignette "my_new_stock_db". 
-You can clone a project implementing it here: https://github.com/henrique-anatole/stock_data_db
+``` r
+library(DBI)
+library(duckdb)
+library(invest.stock.db)
+
+# 1) Create/connect to a local DuckDB file
+db_file <- file.path(tempdir(), "stock_db.duckdb")
+db_con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db_file, read_only = FALSE)
+
+# 2) Build symbol and benchmark tables
+update_symbols_table(db_con = db_con, indexes = c("SP500"))
+update_benchmarks(db_con = db_con)
+
+# 3) Update core market tables for selected symbols
+symbols <- c("AAPL", "MSFT", "NVDA")
+update_stock_prices(
+  db_con = db_con,
+  symbols_to_get = symbols,
+  start_date = "2024-01-01",
+  interval = "1d"
+)
+update_dividends(
+  db_con = db_con,
+  symbols_to_get = symbols,
+  start_date = "2020-01-01"
+)
+
+# 4) Update fundamentals tables
+update_fundamentals(
+  db_con = db_con,
+  files_to_get = c("income_statement", "cash_flow_statement"),
+  start_date = "2021-01-01"
+)
+
+# 5) Inspect loaded data
+prices_preview <- DBI::dbGetQuery(db_con, "SELECT * FROM daily_prices LIMIT 10")
+symbols_preview <- DBI::dbGetQuery(db_con, "SELECT * FROM all_symbols LIMIT 10")
+
+# 6) Close connection when done
+DBI::dbDisconnect(db_con)
+```
+
+For an end-to-end walkthrough, see the vignette `my_new_stock_db`.
+
+## Main functions
+
+### Database update workflows
+
+- `update_symbols_table()`
+  - Creates/updates the `all_symbols` table from ASX/B3/SP500 universes.
+- `update_benchmarks()`
+  - Creates/updates `benchmark_symbols`.
+- `update_stock_prices()`
+  - Incrementally updates `daily_prices` (`"1d"`) or `hourly_prices` (`"1h"`).
+- `update_dividends()`
+  - Incrementally updates the `dividends` table.
+- `update_fundamentals()`
+  - Updates multiple fundamentals tables using `invest.data::get_fundamentals_data()`.
+
+### Reading and validation
+
+- `load_all_symbols()`
+  - Loads symbols and benchmark subsets from the database.
+- `is_valid_db_connection()`
+  - Validates DBI connection status before update operations.
+
+### Indicators and engineered features
+
+- `add_indicators()`
+  - Adds technical indicator columns to a data frame.
+- Indicator helpers: `get_macd()`, `get_smas()`, `get_emas()`, `get_adx()`, `get_bollinger_bands()`, `get_ichimoku_cloud()`, and others.
+- Earnings/feature helpers: `get_earnings_calendar()`, `create_earnings_features()`, `check_recent_gaps()`, `check_high_before_low()`.
+
+## Vignettes
+
 ``` r
 browseVignettes("invest.stock.db")
-
 ```
 
-## Transform the data to get indicators and other metrics
+Key guides include:
 
-``` r
-browseVignettes("add_indicators")
-```
+- `my_new_stock_db`: create a new stock database end-to-end.
+- `browse_stock_data`: query and inspect stored market data.
+- `add_indicators`: calculate indicators and feature columns.
+
+## Included sample datasets
+
+- `sample_all_symbols`
+- `sample_stock_prices`
+- `sample_fundamentals`
+
+## Operational notes
+
+- `update_*` functions are designed for incremental updates and avoid duplicate inserts.
+- Most fetch/update workflows rely on upstream data providers via `invest.data`, so network/API availability may affect results.
+- For large universes, run updates in batches and/or on a schedule.
+
+## Data sources
+
+| Function | Primary source(s) |
+|----|----|
+| `update_stock_prices()` | Yahoo Finance / Tiingo (via `invest.data`) |
+| `update_dividends()` | Yahoo Finance (via `invest.data`) |
+| `update_symbols_table()` | SP500, ASX, B3 scrapers (via `invest.data`) |
+| `update_fundamentals()` | DoltHub earnings repository (via `invest.data`) |
 
 
