@@ -82,7 +82,7 @@ add_indicators <- function(
   # min_max
   # grepl any mention of min_max or donchian in the indicators vector
   if (any(grepl("min_max|donchian", indicators))) {
-    min_max <- get_donchian_channels(db_con, timeframe = "1d", period = 120)
+    min_max <- get_donchian_channels(db_con, timeframe = "1d", period = 52)
     prepared_data <- prepared_data %>%
       left_join(min_max, by = c("symbol", "open_time"))
   }
