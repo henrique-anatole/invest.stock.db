@@ -44,7 +44,7 @@ update_symbols_table <- function(db_con, indexes = NULL, save_data = TRUE) {
 
   # Fetch new symbols from various indexes
   if (is.null(indexes) | "ASX" %in% indexes) {
-    asx_symbols <- scrap_asx_symbols()
+    asx_symbols <- invest.data::scrap_asx_symbols()
     all_symbols <- dplyr::bind_rows(
       all_symbols,
       dplyr::mutate(asx_symbols, index = "ASX")

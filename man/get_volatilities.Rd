@@ -14,7 +14,7 @@ get_volatilities(db_con, timeframe = "1d", periods = c(10, 20, 50))
 \item{periods}{Numeric vector of periods for Volatility and ATR.}
 }
 \value{
-A data frame with volatility metrics for each specified period.
+A data frame with volatility metrics for each specified period, including intraday volatility, true range, and gap metrics.
 }
 \description{
 Calculates Intraday Volatility, True Range, Price Gaps, Standard Deviation,

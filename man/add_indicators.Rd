@@ -5,7 +5,7 @@
 \title{Orchestrate Indicator Addition}
 \usage{
 add_indicators(
-  all_symbol_data,
+  prepared_data,
   indicators,
   model_labels = NULL,
   target_condition = NULL,
@@ -13,7 +13,7 @@ add_indicators(
 )
 }
 \arguments{
-\item{all_symbol_data}{Dataframe containing 'symbol' and 'open_time'.}
+\item{prepared_data}{Dataframe containing 'symbol' and 'open_time'.}
 
 \item{indicators}{Character vector of requested indicator names.}
 

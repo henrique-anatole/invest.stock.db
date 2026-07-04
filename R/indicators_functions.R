@@ -2290,8 +2290,8 @@ check_high_before_low <- function(
         low_pct_changes,
         ~ {
           # Find first positions where thresholds are crossed
-          high_pos = which(.x >= high_threshold)
-          low_pos = which(.y <= low_threshold)
+          high_pos <- which(.x >= high_threshold)
+          low_pos <- which(.y <= low_threshold)
 
           # If neither threshold is hit, return FALSE
           if (length(high_pos) == 0 && length(low_pos) == 0) {

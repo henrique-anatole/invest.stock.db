@@ -209,7 +209,7 @@ add_indicators <- function(
       left_join(cci, by = c("symbol", "open_time"))
   }
   # ichimoku_cloud
-  if (any(grepl("ichimoku_cloud", indicators))) {
+  if (any(grepl("ichimoku", indicators))) {
     ichimoku_cloud <- get_ichimoku_cloud(
       db_con,
       timeframe = "1d",
@@ -237,8 +237,17 @@ add_indicators <- function(
   }
 
   # fundamental indicators
-  if (any(grepl("fundamental", indicators))) {
-    prepared_data <- get_full_fundamentals(db_con, prepared_data)
+  # if (any(grepl("fundamental", indicators))) {
+  #   prepared_data <- get_full_fundamentals(db_con, prepared_data)
+  # }
+  if (any(grepl("cash_flow", indicators))) {
+    prepared_data <- get_cash_flow_data(db_con, prepared_data)
+  }
+  if (any(grepl("leverage", indicators))) {
+    prepared_data <- get_leverage_data(db_con, prepared_data)
+  }
+  if (any(grepl("valuation", indicators))) {
+    prepared_data <- get_valuation_data(db_con, prepared_data)
   }
 
   # xgb_model
@@ -248,7 +257,7 @@ add_indicators <- function(
     # label = unique(xgb_model$model_label)[1]
 
     transform_model_indicators <- function(label, xgb_model) {
-      l = gsub("xgboost_", "", label)
+      l <- gsub("xgboost_", "", label)
       indicators <- xgb_model %>%
         filter(model_label == label) %>%
         select(-model_label) %>%
@@ -273,9 +282,9 @@ add_indicators <- function(
     !is.null(target_condition) &
       !any(sapply(target_condition, function(x) any(is.na(x))))
   ) {
-    high_threshold = target_condition$success_return * 100
-    low_threshold = target_condition$failure_return * 100
-    max_period = target_condition$periods
+    high_threshold <- target_condition$success_return * 100
+    low_threshold <- target_condition$failure_return * 100
+    max_period <- target_condition$periods
 
     prepared_data <- check_high_before_low(
       prepared_data,
@@ -308,7 +317,17 @@ add_indicators <- function(
 
   # I believe adujusted is redundant and should also be removed by default
   prepared_data <- prepared_data %>%
-    select(-c("adjusted"))
+    dplyr::select(-c("adjusted")) %>%
+    dplyr::relocate(
+      symbol,
+      open_time,
+      open,
+      high,
+      low,
+      close,
+      volume,
+      .before = everything()
+    )
 
   return(prepared_data)
 }
